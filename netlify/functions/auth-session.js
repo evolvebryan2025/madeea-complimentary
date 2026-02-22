@@ -39,7 +39,7 @@ exports.handler = async (event) => {
 
         const { data: user, error } = await supabase
             .from('users')
-            .select('id, email, name, avatar_url, calendar_id, send_time, timezone, is_active, theme_preference, strategic_goals, google_access_token, created_at')
+            .select('*')
             .eq('id', decoded.userId)
             .single();
 
