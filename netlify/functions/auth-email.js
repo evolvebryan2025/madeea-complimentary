@@ -9,35 +9,64 @@ exports.handler = async (event) => {
         return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
     }
 
+    // Validate required environment variables upfront
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+    const jwtSecret = process.env.JWT_SECRET || process.env.ENCRYPTION_KEY;
+
+    if (!supabaseUrl || !supabaseServiceKey) {
+        console.error('auth-email: Missing SUPABASE_URL or SUPABASE_SERVICE_KEY env vars');
+        return { statusCode: 500, body: JSON.stringify({ error: 'Server misconfigured: missing Supabase credentials' }) };
+    }
+    if (!jwtSecret) {
+        console.error('auth-email: Missing JWT_SECRET and ENCRYPTION_KEY env vars');
+        return { statusCode: 500, body: JSON.stringify({ error: 'Server misconfigured: missing JWT secret' }) };
+    }
+
+    let parsed;
     try {
-        const { access_token } = JSON.parse(event.body);
-        if (!access_token) {
-            return { statusCode: 400, body: JSON.stringify({ error: 'Missing access_token' }) };
+        parsed = JSON.parse(event.body || '{}');
+    } catch (e) {
+        return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON body' }) };
+    }
+
+    const { access_token } = parsed;
+    if (!access_token) {
+        return { statusCode: 400, body: JSON.stringify({ error: 'Missing access_token' }) };
+    }
+
+    try {
+        // 1. Verify the Supabase Auth token server-side
+        const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+        const { data: userData, error: authError } = await supabase.auth.getUser(access_token);
+
+        if (authError) {
+            console.error('auth-email: Supabase getUser error:', authError.message);
+            return { statusCode: 401, body: JSON.stringify({ error: 'Invalid or expired token: ' + authError.message }) };
         }
 
-        // 1. Verify the Supabase Auth token server-side
-        const supabase = createClient(
-            process.env.SUPABASE_URL,
-            process.env.SUPABASE_SERVICE_KEY
-        );
-
-        const { data: { user: authUser }, error: authError } = await supabase.auth.getUser(access_token);
-
-        if (authError || !authUser) {
-            return { statusCode: 401, body: JSON.stringify({ error: 'Invalid or expired token' }) };
+        const authUser = userData?.user;
+        if (!authUser) {
+            return { statusCode: 401, body: JSON.stringify({ error: 'No user found for this token' }) };
         }
 
         // Reject unverified email
         if (!authUser.email_confirmed_at) {
-            return { statusCode: 403, body: JSON.stringify({ error: 'Please verify your email first' }) };
+            return { statusCode: 403, body: JSON.stringify({ error: 'Please verify your email first. Check your inbox for the confirmation link.' }) };
         }
 
         // 2. Find or create user in public.users
-        const { data: existingUser } = await supabase
+        const { data: existingUser, error: selectErr } = await supabase
             .from('users')
             .select('id')
             .eq('email', authUser.email)
             .single();
+
+        if (selectErr && selectErr.code !== 'PGRST116') {
+            // PGRST116 = "no rows found" which is fine (we'll create the user)
+            console.error('auth-email: user lookup error:', selectErr.message, selectErr.code);
+        }
 
         let userId;
 
@@ -54,21 +83,28 @@ exports.handler = async (event) => {
                 .select('id')
                 .single();
 
-            if (insertErr) throw insertErr;
+            if (insertErr) {
+                console.error('auth-email: user insert error:', insertErr.message, insertErr.code, insertErr.details);
+                return { statusCode: 500, body: JSON.stringify({ error: 'Failed to create user record: ' + insertErr.message }) };
+            }
+            if (!newUser) {
+                console.error('auth-email: insert returned no user data');
+                return { statusCode: 500, body: JSON.stringify({ error: 'Failed to create user record: no data returned' }) };
+            }
             userId = newUser.id;
         }
 
         // 3. Issue our standard JWT cookie (same format all functions expect)
-        const jwtSecret = process.env.JWT_SECRET || process.env.ENCRYPTION_KEY;
         const sessionToken = jwt.sign(
             { userId, email: authUser.email },
             jwtSecret,
             { expiresIn: '30d' }
         );
 
+        const isSecure = process.env.URL?.startsWith('https') || event.headers?.['x-forwarded-proto'] === 'https';
         const sessionCookie = cookie.serialize('meetprep_session', sessionToken, {
             httpOnly: true,
-            secure: process.env.URL?.startsWith('https') || false,
+            secure: isSecure,
             sameSite: 'lax',
             maxAge: 30 * 24 * 60 * 60,
             path: '/',
@@ -85,7 +121,7 @@ exports.handler = async (event) => {
             body: JSON.stringify({ success: true }),
         };
     } catch (err) {
-        console.error('auth-email error:', err);
-        return { statusCode: 500, body: JSON.stringify({ error: 'Authentication failed' }) };
+        console.error('auth-email unexpected error:', err.message, err.stack);
+        return { statusCode: 500, body: JSON.stringify({ error: 'Authentication failed: ' + err.message }) };
     }
 };

@@ -145,18 +145,27 @@ async function handleSignIn() {
     }
 
     showAuthMessage('signin-message', 'Signing in...');
-
-    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
-
-    if (error) {
-        showAuthMessage('signin-message', error.message, true);
-        return;
-    }
-
-    // Bridge to our JWT cookie session
-    showAuthMessage('signin-message', 'Authenticating...');
+    console.log('[SignIn] Step 1: Calling Supabase signInWithPassword...');
 
     try {
+        const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+        console.log('[SignIn] Step 1 done. error:', error?.message || 'none', 'hasSession:', !!data?.session);
+
+        if (error) {
+            showAuthMessage('signin-message', error.message, true);
+            return;
+        }
+
+        if (!data?.session?.access_token) {
+            console.error('[SignIn] No session/access_token returned from Supabase');
+            showAuthMessage('signin-message', 'Sign in succeeded but no session was created. Is your email verified?', true);
+            return;
+        }
+
+        // Bridge to our JWT cookie session
+        showAuthMessage('signin-message', 'Authenticating...');
+        console.log('[SignIn] Step 2: Calling /api/auth-email...');
+
         const response = await fetch(`${CONFIG.apiBase}/auth-email`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -165,17 +174,22 @@ async function handleSignIn() {
         });
 
         const result = await response.json();
+        console.log('[SignIn] Step 2 done. status:', response.status, 'result:', result);
 
         if (!response.ok) {
+            console.error('[SignIn] auth-email failed:', response.status, result);
             showAuthMessage('signin-message', result.error || 'Authentication failed.', true);
             return;
         }
 
         // Success — reload session
-        showAuthMessage('signin-message', '');
+        showAuthMessage('signin-message', 'Loading dashboard...');
+        console.log('[SignIn] Step 3: Calling checkSession...');
         await checkSession();
+        console.log('[SignIn] Step 3 done. checkSession complete.');
     } catch (err) {
-        showAuthMessage('signin-message', 'Network error. Please try again.', true);
+        console.error('[SignIn] Error caught:', err);
+        showAuthMessage('signin-message', 'Error: ' + err.message, true);
     }
 }
 
