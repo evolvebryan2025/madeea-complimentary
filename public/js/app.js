@@ -254,20 +254,23 @@ async function checkSession() {
     }
 
     try {
+        console.log('[checkSession] Calling /api/auth-session...');
+        console.log('[checkSession] Cookies present:', document.cookie || '(none visible - httpOnly cookies are hidden)');
         const response = await fetch(`${CONFIG.apiBase}/auth-session`, {
             credentials: 'include'
         });
 
-        if (response.ok) {
-            const data = await response.json();
-            if (data.user) {
-                currentUser = data.user;
-                showDashboard();
-                return;
-            }
+        const data = await response.json();
+        console.log('[checkSession] Response:', response.status, data);
+
+        if (response.ok && data.user) {
+            currentUser = data.user;
+            showDashboard();
+            return;
         }
+        console.warn('[checkSession] No user in response — showing landing page');
     } catch (err) {
-        console.log('No active session');
+        console.error('[checkSession] Error:', err);
     }
 
     showPage('landing-page');
