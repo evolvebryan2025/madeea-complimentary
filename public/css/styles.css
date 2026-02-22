@@ -562,6 +562,101 @@ img {
     line-height: 1.6;
 }
 
+/* ---------- Executive Suite Section ---------- */
+.suite {
+    padding: var(--space-4xl) var(--space-xl);
+}
+
+.suite-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: var(--space-xl);
+}
+
+.suite-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-primary);
+    border-radius: var(--radius-lg);
+    padding: var(--space-2xl);
+    position: relative;
+    overflow: hidden;
+    transition: all var(--transition-base);
+}
+
+.suite-card:hover {
+    border-color: var(--border-accent);
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-glow);
+}
+
+.suite-card-accent {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+}
+
+.accent-briefs {
+    background: var(--gradient-primary);
+}
+
+.accent-priorities {
+    background: linear-gradient(135deg, #152E47 0%, #FD5811 100%);
+}
+
+.accent-inbox {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #FD5811 100%);
+}
+
+.suite-card-icon {
+    font-size: 2.5rem;
+    margin-bottom: var(--space-md);
+    display: block;
+}
+
+.suite-card h3 {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: var(--space-sm);
+}
+
+.suite-card-desc {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    line-height: 1.6;
+    margin-bottom: var(--space-lg);
+}
+
+.suite-card-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.suite-card-list li {
+    position: relative;
+    padding-left: var(--space-lg);
+    margin-bottom: var(--space-sm);
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.suite-card-list li::before {
+    content: '→';
+    position: absolute;
+    left: 0;
+    color: var(--text-accent);
+    font-weight: 600;
+}
+
+@media (max-width: 768px) {
+    .suite-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 /* ---------- What's Included Section ---------- */
 .included {
     padding: var(--space-4xl) var(--space-xl);
