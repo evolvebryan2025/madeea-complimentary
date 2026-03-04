@@ -52,14 +52,25 @@ exports.handler = async (event) => {
             };
         }
 
-        // Compute google_connected flag, strip raw token
+        // Compute provider connection flags, strip raw tokens
         const google_connected = !!user.google_access_token;
+        const microsoft_connected = !!user.microsoft_access_token;
         delete user.google_access_token;
+        delete user.microsoft_access_token;
+        delete user.microsoft_refresh_token;
+        delete user.microsoft_token_expiry;
 
         return {
             statusCode: 200,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user: { ...user, google_connected } }),
+            body: JSON.stringify({
+                user: {
+                    ...user,
+                    google_connected,
+                    microsoft_connected,
+                    any_provider_connected: google_connected || microsoft_connected,
+                },
+            }),
         };
     } catch (err) {
         console.error('auth-session error:', err.message);

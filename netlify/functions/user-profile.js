@@ -52,6 +52,9 @@ exports.handler = async (event) => {
         delete user.google_access_token;
         delete user.google_refresh_token;
         delete user.google_token_expiry;
+        delete user.microsoft_access_token;
+        delete user.microsoft_refresh_token;
+        delete user.microsoft_token_expiry;
 
         return {
             statusCode: 200,

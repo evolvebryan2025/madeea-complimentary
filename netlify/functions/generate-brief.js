@@ -5,6 +5,7 @@ const { createClient } = require('@supabase/supabase-js');
 const jwt = require('jsonwebtoken');
 const cookie = require('cookie');
 const OpenAI = require('openai');
+const msGraph = require('./lib/microsoft-graph');
 
 // ─── Auth Helper ───
 function getUserIdFromCookie(event) {
@@ -44,58 +45,60 @@ exports.handler = async (event) => {
             return { statusCode: 404, body: JSON.stringify({ error: 'User not found' }) };
         }
 
-        if (!user.google_access_token) {
-            return { statusCode: 400, body: JSON.stringify({ error: 'No Google connection found. Please reconnect.' }) };
+        // 2. Detect provider
+        const provider = user.google_access_token ? 'google' : user.microsoft_access_token ? 'microsoft' : null;
+        if (!provider) {
+            return { statusCode: 400, body: JSON.stringify({ error: 'No Google or Microsoft connection found. Please connect an account.' }) };
         }
 
-        // 2. Set up Google OAuth client
-        const oauth2Client = new google.auth.OAuth2(
-            process.env.GOOGLE_CLIENT_ID,
-            process.env.GOOGLE_CLIENT_SECRET
-        );
-
-        oauth2Client.setCredentials({
-            access_token: user.google_access_token,
-            refresh_token: user.google_refresh_token,
-            expiry_date: user.google_token_expiry ? new Date(user.google_token_expiry).getTime() : null,
-        });
-
-        // Refresh token if expired
-        try {
-            const { credentials } = await oauth2Client.refreshAccessToken();
-            oauth2Client.setCredentials(credentials);
-
-            // Save refreshed tokens
-            if (credentials.access_token !== user.google_access_token) {
-                await supabase.from('users').update({
-                    google_access_token: credentials.access_token,
-                    google_token_expiry: credentials.expiry_date ? new Date(credentials.expiry_date).toISOString() : null,
-                }).eq('id', userId);
-            }
-        } catch (refreshErr) {
-            console.log('Token refresh note:', refreshErr.message);
-            // Continue with existing token — it might still be valid
-        }
-
-        // 3. Fetch today's calendar events
-        const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+        // 3. Set up provider client & fetch calendar events
+        let oauth2Client = null;
+        let graphClient = null;
         const now = new Date();
         const startOfDay = new Date(now);
         startOfDay.setHours(0, 0, 0, 0);
         const endOfDay = new Date(now);
         endOfDay.setHours(23, 59, 59, 999);
-
         const calendarId = user.calendar_id || 'primary';
+        let allEvents = [];
 
-        const eventsRes = await calendar.events.list({
-            calendarId,
-            timeMin: startOfDay.toISOString(),
-            timeMax: endOfDay.toISOString(),
-            singleEvents: true,
-            orderBy: 'startTime',
-        });
+        if (provider === 'google') {
+            oauth2Client = new google.auth.OAuth2(
+                process.env.GOOGLE_CLIENT_ID,
+                process.env.GOOGLE_CLIENT_SECRET
+            );
+            oauth2Client.setCredentials({
+                access_token: user.google_access_token,
+                refresh_token: user.google_refresh_token,
+                expiry_date: user.google_token_expiry ? new Date(user.google_token_expiry).getTime() : null,
+            });
+            try {
+                const { credentials } = await oauth2Client.refreshAccessToken();
+                oauth2Client.setCredentials(credentials);
+                if (credentials.access_token !== user.google_access_token) {
+                    await supabase.from('users').update({
+                        google_access_token: credentials.access_token,
+                        google_token_expiry: credentials.expiry_date ? new Date(credentials.expiry_date).toISOString() : null,
+                    }).eq('id', userId);
+                }
+            } catch (refreshErr) {
+                console.log('Token refresh note:', refreshErr.message);
+            }
 
-        const allEvents = eventsRes.data.items || [];
+            const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+            const eventsRes = await calendar.events.list({
+                calendarId,
+                timeMin: startOfDay.toISOString(),
+                timeMax: endOfDay.toISOString(),
+                singleEvents: true,
+                orderBy: 'startTime',
+            });
+            allEvents = eventsRes.data.items || [];
+        } else {
+            graphClient = await msGraph.createGraphClient(user, supabase);
+            const msEvents = await msGraph.fetchCalendarEvents(graphClient, startOfDay.toISOString(), endOfDay.toISOString());
+            allEvents = msEvents.map(e => msGraph.normalizeGraphEvent(e, user.email));
+        }
 
         // 4. Filter to real meetings (with attendees, not cancelled)
         const meetings = allEvents.filter(
@@ -123,16 +126,17 @@ exports.handler = async (event) => {
             };
         }
 
-        // 5. Set up Gmail and Drive
-        const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-        const drive = google.drive({ version: 'v3', auth: oauth2Client });
+        // 5. Set up mail and file services
+        const gmail = provider === 'google' ? google.gmail({ version: 'v1', auth: oauth2Client }) : null;
+        const drive = provider === 'google' ? google.drive({ version: 'v3', auth: oauth2Client }) : null;
+        const calendar = provider === 'google' ? google.calendar({ version: 'v3', auth: oauth2Client }) : null;
 
         // 6. Process each meeting
         const meetingBriefs = [];
 
         for (const meeting of meetings) {
             try {
-                const brief = await processMeeting(meeting, gmail, drive, calendar, calendarId, user);
+                const brief = await processMeeting(meeting, gmail, drive, calendar, calendarId, user, provider, graphClient);
                 meetingBriefs.push(brief);
             } catch (meetingErr) {
                 console.error(`Error processing meeting "${meeting.summary}":`, meetingErr.message);
@@ -150,12 +154,16 @@ exports.handler = async (event) => {
         // 7. Compose HTML email
         const emailHtml = composeEmail(meetingBriefs, user);
 
-        // 8. Send via Gmail
-        const rawEmail = createRawEmail(user.email, emailHtml.subject, emailHtml.html);
-        await gmail.users.messages.send({
-            userId: 'me',
-            requestBody: { raw: rawEmail },
-        });
+        // 8. Send via email provider
+        if (provider === 'google') {
+            const rawEmail = createRawEmail(user.email, emailHtml.subject, emailHtml.html);
+            await gmail.users.messages.send({
+                userId: 'me',
+                requestBody: { raw: rawEmail },
+            });
+        } else {
+            await msGraph.sendEmail(graphClient, user.email, emailHtml.subject, emailHtml.html);
+        }
 
         // 9. Log success
         await supabase.from('briefing_logs').insert({
@@ -198,7 +206,7 @@ exports.handler = async (event) => {
 //  Helper Functions
 // ═══════════════════════════════════════════════
 
-async function processMeeting(meeting, gmail, drive, calendar, calendarId, user) {
+async function processMeeting(meeting, gmail, drive, calendar, calendarId, user, provider, graphClient) {
     const subject = meeting.summary || 'Untitled Meeting';
     const description = meeting.description || '';
     const attendees = (meeting.attendees || []).map((a) => ({
@@ -220,9 +228,15 @@ async function processMeeting(meeting, gmail, drive, calendar, calendarId, user)
 
     // Search related emails (parallel)
     const [relatedEmails, relatedDocs, previousMeetings] = await Promise.all([
-        searchRelatedEmails(gmail, keywords, attendees),
-        searchDriveDocuments(drive, keywords),
-        searchPreviousMeetings(calendar, subject, calendarId),
+        provider === 'google'
+            ? searchRelatedEmails(gmail, keywords, attendees)
+            : searchRelatedEmailsMicrosoft(graphClient, keywords, attendees),
+        provider === 'google'
+            ? searchDriveDocuments(drive, keywords)
+            : msGraph.searchFiles(graphClient, keywords, 6),
+        provider === 'google'
+            ? searchPreviousMeetings(calendar, subject, calendarId)
+            : searchPreviousMeetingsMicrosoft(graphClient, subject),
     ]);
 
     // Generate AI brief
@@ -350,6 +364,71 @@ async function searchDriveDocuments(drive, keywords) {
     } catch (err) {
         console.log('Drive search error:', err.message);
         return [];
+    }
+}
+
+async function searchRelatedEmailsMicrosoft(graphClient, keywords, attendees) {
+    try {
+        const attendeeEmails = attendees.filter(a => !a.self).map(a => a.email).slice(0, 5);
+        const searchParts = [];
+        if (keywords) searchParts.push(keywords);
+        if (attendeeEmails.length) searchParts.push(attendeeEmails.join(' '));
+        const searchQuery = searchParts.join(' ');
+        if (!searchQuery) return [];
+
+        const results = await msGraph.searchEmails(graphClient, searchQuery, 8);
+        return results.map(e => msGraph.normalizeGraphEmail(e));
+    } catch (err) {
+        console.log('Microsoft email search error:', err.message);
+        return [];
+    }
+}
+
+async function searchPreviousMeetingsMicrosoft(graphClient, subject) {
+    try {
+        const timeMin = new Date(Date.now() - 60 * 86400000).toISOString();
+        const timeMax = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+
+        const result = await graphClient
+            .api('/me/calendarView')
+            .query({
+                startDateTime: timeMin,
+                endDateTime: timeMax,
+                $orderby: 'start/dateTime',
+                $top: 5,
+                $filter: `contains(subject,'${(subject.split(/\s+/)[0] || '').replace(/'/g, "''")}')`,
+            })
+            .select('subject,start,attendees')
+            .get();
+
+        return (result.value || []).map(e => ({
+            subject: e.subject || '',
+            date: e.start?.dateTime || '',
+            attendee_count: (e.attendees || []).length,
+            description: '',
+        }));
+    } catch (err) {
+        console.log('Microsoft calendar search error:', err.message);
+        // Fallback: try without filter (filter may not be supported on calendarView)
+        try {
+            const events = await msGraph.fetchCalendarEvents(
+                graphClient,
+                new Date(Date.now() - 60 * 86400000).toISOString(),
+                new Date(new Date().setHours(0, 0, 0, 0)).toISOString()
+            );
+            const firstWord = (subject.split(/\s+/)[0] || '').toLowerCase();
+            return events
+                .filter(e => (e.subject || '').toLowerCase().includes(firstWord))
+                .slice(0, 5)
+                .map(e => ({
+                    subject: e.subject || '',
+                    date: e.start?.dateTime || '',
+                    attendee_count: (e.attendees || []).length,
+                    description: '',
+                }));
+        } catch {
+            return [];
+        }
     }
 }
 

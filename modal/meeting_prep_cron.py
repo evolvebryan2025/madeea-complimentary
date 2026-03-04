@@ -25,6 +25,7 @@ image = modal.Image.debian_slim(python_version="3.11").pip_install(
     "openai",
     "supabase",
     "httpx",
+    "msal",
 )
 
 # ─── Secrets ───
@@ -114,24 +115,32 @@ def is_send_time(user: dict, now_utc: datetime) -> bool:
 
 
 def process_user(supabase, user: dict):
-    """Process a single user — fetch meetings, gather context, generate brief, send email."""
+    """Process a single user — detect provider, fetch meetings, generate brief, send email."""
+
+    # Detect provider
+    if user.get("google_access_token"):
+        process_user_google(supabase, user)
+    elif user.get("microsoft_access_token"):
+        process_user_microsoft(supabase, user)
+    else:
+        raise Exception("No valid provider credentials")
+
+
+def process_user_google(supabase, user: dict):
+    """Process a Google-connected user."""
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
 
-    # Refresh token if needed
     creds = get_google_credentials(user)
-
     if not creds:
         raise Exception("No valid Google credentials")
 
-    # Update stored tokens if refreshed
     if creds.token != user.get("google_access_token"):
         supabase.table("users").update({
             "google_access_token": creds.token,
             "google_token_expiry": creds.expiry.isoformat() if creds.expiry else None,
         }).eq("id", user["id"]).execute()
 
-    # 1. Fetch today's calendar events
     calendar_service = build("calendar", "v3", credentials=creds)
     meetings = get_todays_meetings(calendar_service, user.get("calendar_id", "primary"))
 
@@ -146,7 +155,6 @@ def process_user(supabase, user: dict):
         }).execute()
         return
 
-    # 2. Filter to real meetings (with attendees, not cancelled)
     real_meetings = [
         m for m in meetings
         if m.get("attendees") and m.get("status") != "cancelled"
@@ -156,7 +164,6 @@ def process_user(supabase, user: dict):
         print(f"  No real meetings today for {user['email']}")
         return
 
-    # 3. For each meeting, gather context
     gmail_service = build("gmail", "v1", credentials=creds)
     drive_service = build("drive", "v3", credentials=creds)
 
@@ -175,11 +182,93 @@ def process_user(supabase, user: dict):
                 "meeting": meeting,
             })
 
-    # 4. Compose and send email
     html_email = compose_email(meeting_briefs, user)
     send_email(gmail_service, user["email"], html_email["subject"], html_email["html"])
 
-    # 5. Log success
+    supabase.table("briefing_logs").insert({
+        "user_id": user["id"],
+        "meeting_count": len(real_meetings),
+        "status": "success",
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }).execute()
+
+    print(f"  ✅ Sent brief with {len(real_meetings)} meetings to {user['email']}")
+
+
+def process_user_microsoft(supabase, user: dict):
+    """Process a Microsoft-connected user."""
+    import httpx
+
+    access_token = get_microsoft_access_token(supabase, user)
+    if not access_token:
+        raise Exception("No valid Microsoft credentials")
+
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+
+    # 1. Fetch today's calendar events
+    now = datetime.now(timezone.utc)
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_day = start_of_day + timedelta(days=1)
+
+    cal_url = (
+        f"https://graph.microsoft.com/v1.0/me/calendarView"
+        f"?startDateTime={start_of_day.isoformat()}"
+        f"&endDateTime={end_of_day.isoformat()}"
+        f"&$orderby=start/dateTime"
+        f"&$top=50"
+        f"&$select=subject,start,end,attendees,location,bodyPreview,onlineMeetingUrl,onlineMeeting,isOrganizer,organizer,isCancelled"
+    )
+
+    with httpx.Client(timeout=30) as client:
+        cal_resp = client.get(cal_url, headers=headers)
+        cal_resp.raise_for_status()
+        ms_events = cal_resp.json().get("value", [])
+
+    # Normalize events to Google shape
+    meetings = []
+    user_email = user.get("email", "")
+    for ev in ms_events:
+        normalized = normalize_ms_event(ev, user_email)
+        meetings.append(normalized)
+
+    if not meetings:
+        print(f"  No meetings today for {user['email']}")
+        supabase.table("briefing_logs").insert({
+            "user_id": user["id"],
+            "meeting_count": 0,
+            "status": "success",
+            "error_message": "No meetings today",
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+        return
+
+    real_meetings = [
+        m for m in meetings
+        if m.get("attendees") and m.get("status") != "cancelled"
+    ]
+
+    if not real_meetings:
+        print(f"  No real meetings today for {user['email']}")
+        return
+
+    # 2. Process each meeting
+    meeting_briefs = []
+    for meeting in real_meetings:
+        try:
+            brief = process_single_meeting_microsoft(meeting, headers, user)
+            meeting_briefs.append(brief)
+        except Exception as e:
+            print(f"  Error processing meeting '{meeting.get('summary', 'Unknown')}': {e}")
+            meeting_briefs.append({
+                "subject": meeting.get("summary", "Unknown Meeting"),
+                "brief": f"Error generating brief: {str(e)}",
+                "meeting": meeting,
+            })
+
+    # 3. Compose and send email
+    html_email = compose_email(meeting_briefs, user)
+    send_email_microsoft(headers, user["email"], html_email["subject"], html_email["html"])
+
     supabase.table("briefing_logs").insert({
         "user_id": user["id"],
         "meeting_count": len(real_meetings),
@@ -643,6 +732,277 @@ def send_email(gmail_service, to_email: str, subject: str, html_body: str):
     gmail_service.users().messages().send(
         userId="me", body={"raw": raw}
     ).execute()
+
+
+# ═══════════════════════════════════════════════
+#  Microsoft-Specific Functions
+# ═══════════════════════════════════════════════
+
+def get_microsoft_access_token(supabase, user: dict) -> str:
+    """Get a valid Microsoft access token, refreshing if expired."""
+    import httpx
+
+    access_token = user.get("microsoft_access_token")
+    refresh_token = user.get("microsoft_refresh_token")
+    expiry_str = user.get("microsoft_token_expiry")
+
+    # Check if token is expired (5 min buffer)
+    is_expired = True
+    if expiry_str:
+        try:
+            expiry = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
+            is_expired = datetime.now(timezone.utc) > expiry - timedelta(minutes=5)
+        except Exception:
+            pass
+
+    if is_expired and refresh_token:
+        try:
+            token_url = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+            data = {
+                "client_id": os.environ["MICROSOFT_CLIENT_ID"],
+                "client_secret": os.environ["MICROSOFT_CLIENT_SECRET"],
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+                "scope": "User.Read Calendars.Read Mail.Read Mail.Send Files.Read.All Tasks.Read offline_access",
+            }
+
+            with httpx.Client(timeout=15) as client:
+                resp = client.post(token_url, data=data)
+                resp.raise_for_status()
+                token_data = resp.json()
+
+            if token_data.get("access_token"):
+                access_token = token_data["access_token"]
+                update_data = {
+                    "microsoft_access_token": access_token,
+                }
+                if token_data.get("expires_in"):
+                    new_expiry = datetime.now(timezone.utc) + timedelta(seconds=token_data["expires_in"])
+                    update_data["microsoft_token_expiry"] = new_expiry.isoformat()
+                if token_data.get("refresh_token"):
+                    update_data["microsoft_refresh_token"] = token_data["refresh_token"]
+
+                supabase.table("users").update(update_data).eq("id", user["id"]).execute()
+
+        except Exception as e:
+            print(f"  Microsoft token refresh error: {e}")
+
+    return access_token
+
+
+def normalize_ms_event(ms_event: dict, user_email: str) -> dict:
+    """Normalize a Microsoft Graph calendar event to Google Calendar shape."""
+    response_map = {
+        "accepted": "accepted",
+        "declined": "declined",
+        "tentativelyAccepted": "tentative",
+        "none": "needsAction",
+        "notResponded": "needsAction",
+    }
+
+    attendees = []
+    for a in ms_event.get("attendees", []):
+        email_addr = (a.get("emailAddress", {}).get("address", "") or "").lower()
+        attendees.append({
+            "email": a.get("emailAddress", {}).get("address", ""),
+            "displayName": a.get("emailAddress", {}).get("name", ""),
+            "responseStatus": response_map.get(
+                (a.get("status", {}) or {}).get("response", ""), "needsAction"
+            ),
+            "self": email_addr == (user_email or "").lower(),
+            "organizer": (
+                (ms_event.get("organizer", {}).get("emailAddress", {}).get("address", "") or "").lower()
+                == email_addr
+            ),
+        })
+
+    return {
+        "summary": ms_event.get("subject", ""),
+        "description": ms_event.get("bodyPreview", ""),
+        "start": {"dateTime": (ms_event.get("start") or {}).get("dateTime", "")},
+        "end": {"dateTime": (ms_event.get("end") or {}).get("dateTime", "")},
+        "attendees": attendees,
+        "status": "cancelled" if ms_event.get("isCancelled") else "confirmed",
+        "hangoutLink": ms_event.get("onlineMeetingUrl") or (ms_event.get("onlineMeeting") or {}).get("joinUrl", ""),
+        "location": (ms_event.get("location") or {}).get("displayName", ""),
+    }
+
+
+def process_single_meeting_microsoft(meeting: dict, headers: dict, user: dict) -> dict:
+    """Gather context for a single meeting using Microsoft Graph and generate AI brief."""
+    import httpx
+
+    subject = meeting.get("summary", "Untitled Meeting")
+    description = meeting.get("description", "")
+    attendees = meeting.get("attendees", [])
+
+    start_time = meeting.get("start", {}).get("dateTime", "")
+    end_time = meeting.get("end", {}).get("dateTime", "")
+
+    attendee_list = []
+    for a in attendees:
+        attendee_list.append({
+            "email": a.get("email", ""),
+            "name": a.get("displayName", a.get("email", "").split("@")[0]),
+            "status": a.get("responseStatus", "unknown"),
+            "organizer": a.get("organizer", False),
+            "self": a.get("self", False),
+        })
+
+    self_domain = ""
+    for a in attendee_list:
+        if a["self"]:
+            self_domain = a["email"].split("@")[-1]
+            break
+
+    external = [a for a in attendee_list if a["email"].split("@")[-1] != self_domain and self_domain]
+    internal = [a for a in attendee_list if a["email"].split("@")[-1] == self_domain or not self_domain]
+
+    meeting_type = detect_meeting_type(subject, external)
+    keywords = extract_keywords(subject, description)
+
+    # Search related emails via Microsoft Graph
+    related_emails = search_related_emails_microsoft(headers, keywords, attendee_list)
+    related_docs = search_drive_documents_microsoft(headers, keywords)
+    previous_meetings = []  # Calendar search with filter is limited in Graph; skip for cron
+
+    ai_brief = generate_ai_brief(
+        subject=subject,
+        description=description,
+        start_time=start_time,
+        end_time=end_time,
+        attendees=attendee_list,
+        external_attendees=external,
+        internal_attendees=internal,
+        meeting_type=meeting_type,
+        related_emails=related_emails,
+        related_docs=related_docs,
+        previous_meetings=previous_meetings,
+        meeting=meeting,
+    )
+
+    return {
+        "subject": subject,
+        "brief": ai_brief,
+        "meeting": meeting,
+        "start_time": start_time,
+        "end_time": end_time,
+        "attendees": attendee_list,
+        "context": {
+            "emails": len(related_emails),
+            "documents": len(related_docs),
+            "previous_meetings": len(previous_meetings),
+        },
+    }
+
+
+def search_related_emails_microsoft(headers: dict, keywords: str, attendees: list) -> list:
+    """Search Microsoft Outlook for related emails."""
+    import httpx
+    from urllib.parse import quote
+
+    try:
+        attendee_emails = [a["email"] for a in attendees if not a.get("self")][:5]
+        search_parts = []
+        if keywords:
+            search_parts.append(keywords)
+        if attendee_emails:
+            search_parts.extend(attendee_emails)
+        search_query = " ".join(search_parts)
+        if not search_query:
+            return []
+
+        url = (
+            f"https://graph.microsoft.com/v1.0/me/messages"
+            f"?$search=\"{quote(search_query)}\""
+            f"&$top=8"
+            f"&$select=id,subject,from,receivedDateTime,bodyPreview"
+        )
+
+        with httpx.Client(timeout=15) as client:
+            resp = client.get(url, headers=headers)
+            resp.raise_for_status()
+            messages = resp.json().get("value", [])
+
+        return [
+            {
+                "subject": m.get("subject", "No Subject"),
+                "from": (m.get("from", {}).get("emailAddress", {}).get("address", "") or
+                         m.get("from", {}).get("emailAddress", {}).get("name", "")),
+                "date": m.get("receivedDateTime", ""),
+                "snippet": m.get("bodyPreview", ""),
+            }
+            for m in messages
+        ]
+
+    except Exception as e:
+        print(f"  Microsoft email search error: {e}")
+        return []
+
+
+def search_drive_documents_microsoft(headers: dict, keywords: str) -> list:
+    """Search OneDrive for related documents."""
+    import httpx
+    from urllib.parse import quote
+
+    try:
+        if not keywords:
+            return []
+
+        url = (
+            f"https://graph.microsoft.com/v1.0/me/drive/root/search(q='{quote(keywords)}')"
+            f"?$top=6"
+            f"&$select=name,webUrl,lastModifiedDateTime,createdBy,file"
+        )
+
+        with httpx.Client(timeout=15) as client:
+            resp = client.get(url, headers=headers)
+            resp.raise_for_status()
+            files = resp.json().get("value", [])
+
+        ext_types = {
+            "docx": "Word Document", "doc": "Word Document",
+            "xlsx": "Excel Spreadsheet", "xls": "Excel Spreadsheet",
+            "pptx": "PowerPoint", "ppt": "PowerPoint",
+            "pdf": "PDF", "txt": "Text File",
+        }
+
+        results = []
+        for f in files:
+            name = f.get("name", "")
+            ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+            results.append({
+                "name": name,
+                "type": ext_types.get(ext, "Document"),
+                "link": f.get("webUrl", ""),
+                "modified": f.get("lastModifiedDateTime", ""),
+                "owner": (f.get("createdBy", {}).get("user", {}).get("displayName", "") or ""),
+            })
+        return results
+
+    except Exception as e:
+        print(f"  OneDrive search error: {e}")
+        return []
+
+
+def send_email_microsoft(headers: dict, to_email: str, subject: str, html_body: str):
+    """Send email via Microsoft Graph API."""
+    import httpx
+
+    url = "https://graph.microsoft.com/v1.0/me/sendMail"
+    payload = {
+        "message": {
+            "subject": subject,
+            "body": {"contentType": "HTML", "content": html_body},
+            "toRecipients": [
+                {"emailAddress": {"address": to_email}},
+            ],
+        },
+    }
+
+    with httpx.Client(timeout=30) as client:
+        resp = client.post(url, headers=headers, json=payload)
+        resp.raise_for_status()
 
 
 # ─── Manual Trigger for Testing ───

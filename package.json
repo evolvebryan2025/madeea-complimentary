@@ -8,11 +8,13 @@
         "deploy": "netlify deploy --prod"
     },
     "dependencies": {
+        "@azure/msal-node": "^5.0.6",
+        "@microsoft/microsoft-graph-client": "^3.0.7",
         "@supabase/supabase-js": "^2.39.0",
+        "cookie": "^0.6.0",
         "googleapis": "^130.0.0",
-        "openai": "^4.28.0",
         "jsonwebtoken": "^9.0.2",
-        "cookie": "^0.6.0"
+        "openai": "^4.28.0"
     },
     "devDependencies": {
         "netlify-cli": "^17.0.0"

@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Meeting Preparation Automation — AI-Powered Meeting Briefs</title>
     <meta name="description"
-        content="Automatically receive AI-generated meeting preparation briefs every morning. Powered by Google Calendar, Gmail, Drive, and OpenAI.">
+        content="Automatically receive AI-generated meeting preparation briefs every morning. Powered by Google or Microsoft Calendar, Email, Drive, and OpenAI.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap"
@@ -50,7 +50,7 @@
                 </h1>
                 <p class="hero-subtitle">
                     Your AI-powered executive command center. Get meeting briefs, prioritize your day,
-                    and tame your inbox — all powered by your Calendar, Gmail, and Drive.
+                    and tame your inbox — powered by your Google or Microsoft Calendar, Email, and Drive.
                 </p>
                 <div class="hero-cta" id="auth-section">
                     <div class="auth-tabs">
@@ -97,8 +97,8 @@
                 <div class="features-grid">
                     <div class="feature-card">
                         <div class="feature-icon">🔗</div>
-                        <h3>Connect Your Google</h3>
-                        <p>Sign in with Google and grant access to Calendar, Gmail, and Drive. Your data stays secure
+                        <h3>Connect Your Account</h3>
+                        <p>Sign in with Google or Microsoft and grant access to Calendar, Email, and Drive. Your data stays secure
                             and encrypted.</p>
                     </div>
                     <div class="feature-card">
@@ -220,7 +220,7 @@
                         <span class="included-icon">📎</span>
                         <div>
                             <h4>Required Documents</h4>
-                            <p>Links to relevant files from Google Drive to review before the meeting</p>
+                            <p>Links to relevant files from Google Drive or OneDrive to review before the meeting</p>
                         </div>
                     </div>
                     <div class="included-item">
@@ -325,7 +325,7 @@
                             <div class="status-card-icon">✅</div>
                             <div class="status-card-content">
                                 <h3>Connection Status</h3>
-                                <p id="connection-status">Google Connected</p>
+                                <p id="connection-status">Not Connected</p>
                             </div>
                         </div>
                         <div class="status-card">
@@ -354,7 +354,7 @@
                     <!-- Generate Brief Now -->
                     <div class="generate-brief-section" style="position:relative;">
                         <div class="google-gate-overlay" id="gate-brief" style="display:none;">
-                            <p>🔗 Connect your Google account in <a href="#" onclick="showSection('profile', event)">Settings</a> to use this feature.</p>
+                            <p>🔗 Connect your Google or Microsoft account in <a href="#" onclick="showSection('profile', event)">Settings</a> to use this feature.</p>
                         </div>
                         <div class="generate-brief-card">
                             <div class="generate-brief-info">
@@ -378,7 +378,7 @@
                     <!-- Priority Alignment -->
                     <div class="generate-brief-section" style="position:relative;">
                         <div class="google-gate-overlay" id="gate-priorities" style="display:none;">
-                            <p>🔗 Connect your Google account in <a href="#" onclick="showSection('profile', event)">Settings</a> to use this feature.</p>
+                            <p>🔗 Connect your Google or Microsoft account in <a href="#" onclick="showSection('profile', event)">Settings</a> to use this feature.</p>
                         </div>
                         <div class="generate-brief-card priorities-card">
                             <div class="generate-brief-info">
@@ -403,7 +403,7 @@
                     <!-- Inbox Summary -->
                     <div class="generate-brief-section" style="position:relative;">
                         <div class="google-gate-overlay" id="gate-inbox" style="display:none;">
-                            <p>🔗 Connect your Google account in <a href="#" onclick="showSection('profile', event)">Settings</a> to use this feature.</p>
+                            <p>🔗 Connect your Google or Microsoft account in <a href="#" onclick="showSection('profile', event)">Settings</a> to use this feature.</p>
                         </div>
                         <div class="generate-brief-card inbox-card">
                             <div class="generate-brief-info">
@@ -473,7 +473,7 @@
                                 <label>Profile Picture</label>
                                 <div class="avatar-preview">
                                     <img id="profile-avatar-preview" src="" alt="Avatar" class="avatar-img">
-                                    <span class="form-hint">Set via your connected Google account</span>
+                                    <span class="form-hint">Set via your connected Google or Microsoft account</span>
                                 </div>
                             </div>
                         </div>
@@ -570,6 +570,25 @@
                                 Google account connected — all features unlocked.
                             </p>
                             <button type="button" class="btn btn-outline btn-sm" onclick="handleDisconnectGoogle()">Disconnect Google</button>
+                        </div>
+                    </div>
+
+                    <!-- Microsoft Account -->
+                    <div class="form-card" id="microsoft-account-card">
+                        <h3 class="form-card-title">
+                            <span>🔗</span> Microsoft Account
+                        </h3>
+                        <div id="microsoft-not-connected" style="display:none;">
+                            <p class="form-hint" style="font-size:0.9rem; margin-bottom:var(--space-md);">
+                                Connect your Microsoft account to use Outlook email, Calendar, OneDrive, and To Do.
+                            </p>
+                            <button type="button" class="btn btn-primary" onclick="handleConnectMicrosoft()">Connect Microsoft Account</button>
+                        </div>
+                        <div id="microsoft-connected-info" style="display:none;">
+                            <p style="color:var(--success-text); font-size:0.9rem; margin-bottom:var(--space-md);">
+                                Microsoft account connected — Outlook, Calendar, OneDrive, and To Do enabled.
+                            </p>
+                            <button type="button" class="btn btn-outline btn-sm" onclick="handleDisconnectMicrosoft()">Disconnect Microsoft</button>
                         </div>
                     </div>
 

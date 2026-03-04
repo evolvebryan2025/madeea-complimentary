@@ -1,0 +1,963 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "bryan.sumait@madeeas.com",
+          "mode": "list",
+          "cachedResultName": "bryan.sumait@madeeas.com"
+        },
+        "options": {
+          "orderBy": "startTime"
+        }
+      },
+      "id": "237739f8-2a4b-4b46-9b2e-548e4f5038bf",
+      "name": "Get Calendar (3 Days)",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        16,
+        0
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "Ba9SdZrVmrkUAx61",
+          "name": "bryan madeea"
+        }
+      },
+      "notes": "Fetches calendar events for today + next 2 days to identify upcoming commitments and deadlines"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 30,
+        "filters": {
+          "q": "is:unread OR is:starred OR is:important",
+          "receivedAfter": "={{ $now.minus({days: 3}).toISO() }}"
+        }
+      },
+      "id": "764f9c8e-5ec1-43ad-a3d6-0274e8a6b838",
+      "name": "Get Priority Emails",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        16,
+        208
+      ],
+      "webhookId": "577ddd13-6655-4665-a2c3-a60901f2afab",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "plWJdoy5NXVBWQTj",
+          "name": "bryan madeea"
+        }
+      },
+      "notes": "Fetches unread, starred, and important emails from the last 3 days"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"executiveName\": \"Executive\",\n  \"executiveEmail\": \"your-email@example.com\",\n  \"googleTaskListId\": \"@default\",\n  \"slackChannelId\": \"\",\n  \"notionDatabaseId\": \"\",\n  \"strategicGoals\": [\n    \"Drive Q4 revenue targets\",\n    \"Complete product launch\",\n    \"Strengthen key partnerships\",\n    \"Develop leadership team\",\n    \"Improve operational efficiency\"\n  ],\n  \"priorityWeights\": {\n    \"urgency\": 0.3,\n    \"impact\": 0.35,\n    \"strategicAlignment\": 0.25,\n    \"stakeholderImportance\": 0.1\n  }\n}",
+        "options": {}
+      },
+      "id": "345bfc3e-1f17-4930-91e7-d97c3868bf2f",
+      "name": "Set Configuration",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -240,
+        208
+      ],
+      "notes": "Configure your name, email, task list ID, strategic goals, and priority weights here"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process and categorize calendar events\nconst events = $input.all();\nconst now = new Date();\nconst todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());\nconst todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);\nconst tomorrowEnd = new Date(todayStart.getTime() + 48 * 60 * 60 * 1000);\n\nconst processedEvents = events.map(item => {\n  const event = item.json;\n  const startTime = new Date(event.start?.dateTime || event.start?.date);\n  const endTime = new Date(event.end?.dateTime || event.end?.date);\n  const isAllDay = !event.start?.dateTime;\n  \n  // Determine time category\n  let timeCategory = 'later';\n  if (startTime < todayEnd) timeCategory = 'today';\n  else if (startTime < tomorrowEnd) timeCategory = 'tomorrow';\n  \n  // Calculate meeting load (duration in hours)\n  const durationHours = (endTime - startTime) / (1000 * 60 * 60);\n  \n  // Identify meeting type and priority signals\n  const summary = (event.summary || '').toLowerCase();\n  const attendees = event.attendees || [];\n  const externalAttendees = attendees.filter(a => !a.email?.includes(event.organizer?.email?.split('@')[1] || ''));\n  \n  let meetingType = 'general';\n  let prioritySignal = 'normal';\n  \n  // Detect high-priority meeting types\n  if (summary.includes('board') || summary.includes('investor')) {\n    meetingType = 'board/investor';\n    prioritySignal = 'critical';\n  } else if (summary.includes('1:1') || summary.includes('one on one') || summary.includes('1-1')) {\n    meetingType = '1:1';\n    prioritySignal = 'high';\n  } else if (summary.includes('review') || summary.includes('decision')) {\n    meetingType = 'decision';\n    prioritySignal = 'high';\n  } else if (summary.includes('all hands') || summary.includes('town hall')) {\n    meetingType = 'company-wide';\n    prioritySignal = 'high';\n  } else if (summary.includes('deadline') || summary.includes('due')) {\n    meetingType = 'deadline';\n    prioritySignal = 'critical';\n  } else if (summary.includes('interview')) {\n    meetingType = 'interview';\n    prioritySignal = 'high';\n  } else if (externalAttendees.length > 0) {\n    meetingType = 'external';\n    prioritySignal = 'high';\n  } else if (summary.includes('standup') || summary.includes('sync')) {\n    meetingType = 'recurring';\n    prioritySignal = 'normal';\n  }\n  \n  return {\n    json: {\n      id: event.id,\n      title: event.summary || 'Untitled',\n      description: event.description || '',\n      startTime: startTime.toISOString(),\n      endTime: endTime.toISOString(),\n      startTimeFormatted: startTime.toLocaleString('en-US', {\n        weekday: 'short',\n        month: 'short',\n        day: 'numeric',\n        hour: 'numeric',\n        minute: '2-digit'\n      }),\n      timeCategory,\n      isAllDay,\n      durationHours: Math.round(durationHours * 10) / 10,\n      meetingType,\n      prioritySignal,\n      attendeeCount: attendees.length,\n      hasExternalAttendees: externalAttendees.length > 0,\n      location: event.location || '',\n      meetingLink: event.hangoutLink || event.conferenceData?.entryPoints?.[0]?.uri || '',\n      calendarLink: event.htmlLink\n    }\n  };\n});\n\n// Calculate today's meeting load\nconst todayEvents = processedEvents.filter(e => e.json.timeCategory === 'today');\nconst todayMeetingHours = todayEvents.reduce((sum, e) => sum + e.json.durationHours, 0);\nconst criticalMeetings = processedEvents.filter(e => e.json.prioritySignal === 'critical');\nconst highPriorityMeetings = processedEvents.filter(e => e.json.prioritySignal === 'high');\n\nreturn [{\n  json: {\n    events: processedEvents.map(e => e.json),\n    todayEvents: todayEvents.map(e => e.json),\n    summary: {\n      totalEvents: processedEvents.length,\n      todayCount: todayEvents.length,\n      todayMeetingHours: Math.round(todayMeetingHours * 10) / 10,\n      criticalCount: criticalMeetings.length,\n      highPriorityCount: highPriorityMeetings.length,\n      availableHours: Math.max(0, 8 - todayMeetingHours)\n    },\n    criticalMeetings: criticalMeetings.map(e => e.json),\n    highPriorityMeetings: highPriorityMeetings.map(e => e.json)\n  }\n}];"
+      },
+      "id": "7dff142f-1e67-4871-9c9b-d57de5f216c3",
+      "name": "Process Calendar Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        0
+      ],
+      "notes": "Categorizes events by urgency, identifies critical meetings, calculates meeting load"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process and categorize emails for priority analysis\nconst emails = $input.all();\n\nconst processedEmails = emails.map(item => {\n  const email = item.json;\n  const headers = email.payload?.headers || [];\n  \n  const getHeader = (name) => headers.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value || '';\n  \n  const subject = getHeader('subject');\n  const from = getHeader('from');\n  const to = getHeader('to');\n  const date = email.internalDate ? new Date(parseInt(email.internalDate)) : new Date();\n  \n  // Extract sender name and domain\n  const senderMatch = from.match(/([^<]+)?<?([^>]+@([^>]+))>?/);\n  const senderName = (senderMatch?.[1] || '').trim() || from.split('@')[0];\n  const senderEmail = senderMatch?.[2] || from;\n  const senderDomain = senderMatch?.[3] || '';\n  \n  // Determine priority signals\n  const labelIds = email.labelIds || [];\n  const isStarred = labelIds.includes('STARRED');\n  const isImportant = labelIds.includes('IMPORTANT');\n  const isUnread = labelIds.includes('UNREAD');\n  \n  // Analyze subject for urgency\n  const subjectLower = subject.toLowerCase();\n  let urgencyLevel = 'normal';\n  let category = 'general';\n  \n  // Critical urgency indicators\n  if (subjectLower.includes('urgent') || subjectLower.includes('asap') || \n      subjectLower.includes('immediately') || subjectLower.includes('critical')) {\n    urgencyLevel = 'critical';\n  } else if (subjectLower.includes('important') || subjectLower.includes('action required') ||\n             subjectLower.includes('deadline') || subjectLower.includes('reminder')) {\n    urgencyLevel = 'high';\n  } else if (isImportant || isStarred) {\n    urgencyLevel = 'high';\n  }\n  \n  // Categorize email type\n  if (subjectLower.includes('approve') || subjectLower.includes('approval') || subjectLower.includes('sign')) {\n    category = 'approval-needed';\n  } else if (subjectLower.includes('decision') || subjectLower.includes('choose') || subjectLower.includes('option')) {\n    category = 'decision-needed';\n  } else if (subjectLower.includes('fyi') || subjectLower.includes('update') || subjectLower.includes('newsletter')) {\n    category = 'informational';\n  } else if (subjectLower.includes('question') || subjectLower.includes('help') || subjectLower.includes('request')) {\n    category = 'request';\n  } else if (subjectLower.includes('meeting') || subjectLower.includes('invite') || subjectLower.includes('calendar')) {\n    category = 'meeting-related';\n  } else if (subjectLower.includes('report') || subjectLower.includes('status') || subjectLower.includes('weekly')) {\n    category = 'report';\n  }\n  \n  return {\n    id: email.id,\n    threadId: email.threadId,\n    subject,\n    senderName,\n    senderEmail,\n    senderDomain,\n    snippet: email.snippet || '',\n    date: date.toISOString(),\n    dateFormatted: date.toLocaleString('en-US', {\n      weekday: 'short',\n      month: 'short',\n      day: 'numeric',\n      hour: 'numeric',\n      minute: '2-digit'\n    }),\n    isStarred,\n    isImportant,\n    isUnread,\n    urgencyLevel,\n    category,\n    requiresAction: ['approval-needed', 'decision-needed', 'request'].includes(category)\n  };\n});\n\n// Sort by urgency and filter actionable items\nconst urgencyOrder = { critical: 0, high: 1, normal: 2 };\nconst sortedEmails = processedEmails.sort((a, b) => \n  urgencyOrder[a.urgencyLevel] - urgencyOrder[b.urgencyLevel]\n);\n\nconst actionableEmails = sortedEmails.filter(e => e.requiresAction);\nconst criticalEmails = sortedEmails.filter(e => e.urgencyLevel === 'critical');\nconst highPriorityEmails = sortedEmails.filter(e => e.urgencyLevel === 'high');\n\nreturn [{\n  json: {\n    emails: sortedEmails,\n    actionableEmails,\n    summary: {\n      totalEmails: sortedEmails.length,\n      unreadCount: sortedEmails.filter(e => e.isUnread).length,\n      actionableCount: actionableEmails.length,\n      criticalCount: criticalEmails.length,\n      highPriorityCount: highPriorityEmails.length,\n      byCategory: {\n        approvalNeeded: sortedEmails.filter(e => e.category === 'approval-needed').length,\n        decisionNeeded: sortedEmails.filter(e => e.category === 'decision-needed').length,\n        requests: sortedEmails.filter(e => e.category === 'request').length\n      }\n    },\n    criticalEmails,\n    highPriorityEmails\n  }\n}];"
+      },
+      "id": "1eebc5c9-7c64-4e61-92dc-466960c2e2d9",
+      "name": "Process Priority Emails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        208
+      ],
+      "notes": "Analyzes emails for urgency, categorizes by type, identifies actionable items"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get all tasks from input\nconst tasks = $input.all();\nconst now = new Date();\nconst todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);\nconst weekEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7);\n\n// Process each task\nconst processedTasks = tasks.map(item => {\n  const task = item.json;\n\n  // Parse due date (use either due_on or due_at)\n  let dueDate = null;\n  let isOverdue = false;\n  let isDueToday = false;\n  let isDueThisWeek = false;\n\n  if (task.due_on || task.due_at) {\n    dueDate = new Date(task.due_on || task.due_at);\n    isOverdue = dueDate < now;\n    isDueToday = dueDate < todayEnd && !isOverdue;\n    isDueThisWeek = dueDate < weekEnd && !isDueToday && !isOverdue;\n  }\n\n  // Analyze task title for priority signals\n  const title = (task.name || '').toLowerCase();\n  let prioritySignal = 'normal';\n  let category = 'general';\n\n  // Priority detection\n  if (isOverdue) {\n    prioritySignal = 'critical';\n  } else if (isDueToday) {\n    prioritySignal = 'high';\n  } else if (title.includes('urgent') || title.includes('critical') || title.includes('asap')) {\n    prioritySignal = 'critical';\n  } else if (title.includes('important') || title.includes('priority') || isDueThisWeek) {\n    prioritySignal = 'high';\n  }\n\n  // Category detection\n  if (title.includes('review') || title.includes('approve') || title.includes('sign')) {\n    category = 'approval';\n  } else if (title.includes('prepare') || title.includes('draft') || title.includes('write')) {\n    category = 'preparation';\n  } else if (title.includes('call') || title.includes('meet') || title.includes('discuss')) {\n    category = 'communication';\n  } else if (title.includes('decide') || title.includes('choose') || title.includes('finalize')) {\n    category = 'decision';\n  } else if (title.includes('follow up') || title.includes('check')) {\n    category = 'follow-up';\n  }\n\n  return {\n    id: task.gid,\n    title: task.name || 'Untitled Task',\n    assigneeId: task.assignee?.gid || null,\n    notes: task.notes || '',\n    dueDate: dueDate?.toISOString() || null,\n    dueDateFormatted: dueDate\n      ? dueDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })\n      : 'No due date',\n    isOverdue,\n    isDueToday,\n    isDueThisWeek,\n    prioritySignal,\n    category,\n    status: task.completed ? 'Completed' : 'Pending',\n    link: task.permalink_url\n  };\n});\n\n// Sort tasks by priority, then due date\nconst priorityOrder = { critical: 0, high: 1, normal: 2 };\nconst sortedTasks = processedTasks.sort((a, b) => {\n  if (priorityOrder[a.prioritySignal] !== priorityOrder[b.prioritySignal]) {\n    return priorityOrder[a.prioritySignal] - priorityOrder[b.prioritySignal];\n  }\n  if (a.dueDate && b.dueDate) return new Date(a.dueDate) - new Date(b.dueDate);\n  if (a.dueDate) return -1;\n  if (b.dueDate) return 1;\n  return 0;\n});\n\n// Filter subsets for summary\nconst overdueTasks = sortedTasks.filter(t => t.isOverdue);\nconst todayTasks = sortedTasks.filter(t => t.isDueToday);\nconst criticalTasks = sortedTasks.filter(t => t.prioritySignal === 'critical');\n\nreturn [\n  {\n    json: {\n      tasks: sortedTasks,\n      summary: {\n        totalTasks: sortedTasks.length,\n        overdueCount: overdueTasks.length,\n        dueTodayCount: todayTasks.length,\n        dueThisWeekCount: sortedTasks.filter(t => t.isDueThisWeek).length,\n        criticalCount: criticalTasks.length,\n        highPriorityCount: sortedTasks.filter(t => t.prioritySignal === 'high').length\n      },\n      overdueTasks,\n      todayTasks,\n      criticalTasks\n    }\n  }\n];\n"
+      },
+      "id": "e73f9e12-ac11-469f-8589-695709c3447f",
+      "name": "Process Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        400
+      ],
+      "notes": "Processes tasks, identifies overdue items, categorizes by urgency"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Consolidate all data for AI priority analysis\nconst items = $input.all();\nconst config = $('Set Configuration').first().json;\n\n// Extract processed data from each source\nlet calendarData = { events: [], todayEvents: [], summary: {}, criticalMeetings: [], highPriorityMeetings: [] };\nlet emailData = { emails: [], actionableEmails: [], summary: {}, criticalEmails: [], highPriorityEmails: [] };\nlet taskData = { tasks: [], summary: {}, overdueTasks: [], todayTasks: [], criticalTasks: [] };\n\nfor (const item of items) {\n  if (item.json.events) calendarData = item.json;\n  if (item.json.emails) emailData = item.json;\n  if (item.json.tasks) taskData = item.json;\n}\n\n// Build comprehensive context for AI\nconst context = {\n  executive: {\n    name: config.executiveName,\n    strategicGoals: config.strategicGoals,\n    priorityWeights: config.priorityWeights\n  },\n  \n  calendar: {\n    summary: calendarData.summary,\n    criticalMeetings: calendarData.criticalMeetings?.slice(0, 5) || [],\n    highPriorityMeetings: calendarData.highPriorityMeetings?.slice(0, 5) || [],\n    todaySchedule: calendarData.todayEvents?.slice(0, 10) || []\n  },\n  \n  emails: {\n    summary: emailData.summary,\n    criticalEmails: emailData.criticalEmails?.slice(0, 5) || [],\n    actionableEmails: emailData.actionableEmails?.slice(0, 8) || []\n  },\n  \n  tasks: {\n    summary: taskData.summary,\n    overdueTasks: taskData.overdueTasks?.slice(0, 5) || [],\n    todayTasks: taskData.todayTasks?.slice(0, 5) || [],\n    criticalTasks: taskData.criticalTasks?.slice(0, 5) || []\n  },\n  \n  // Overall health metrics\n  dayHealth: {\n    meetingLoad: calendarData.summary?.todayMeetingHours || 0,\n    availableFocusHours: calendarData.summary?.availableHours || 8,\n    pendingDecisions: (emailData.summary?.byCategory?.decisionNeeded || 0) + \n                      (taskData.tasks?.filter(t => t.category === 'decision').length || 0),\n    overdueItems: taskData.summary?.overdueCount || 0,\n    criticalItems: (calendarData.summary?.criticalCount || 0) + \n                   (emailData.summary?.criticalCount || 0) + \n                   (taskData.summary?.criticalCount || 0)\n  }\n};\n\nreturn [{ json: context }];"
+      },
+      "id": "78a220b5-ffa1-4474-b21f-7a47a3b313f7",
+      "name": "Build AI Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        208
+      ],
+      "notes": "Consolidates all data sources into structured context for AI analysis"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nlet aiOutput = '';\n\n// Extract AI response from OpenAI or similar nodes\nfor (const item of items) {\n  if (typeof item.json.output === 'string') aiOutput = item.json.output;\n  else if (typeof item.json.content === 'string') aiOutput = item.json.content;\n  else if (typeof item.json.message?.content === 'string') aiOutput = item.json.message.content;\n}\n\n// Fallback if non-string\nif (typeof aiOutput !== 'string') {\n  aiOutput = JSON.stringify(aiOutput, null, 2);\n}\n\n// Strip any old HTML tags to prevent recursive growth\naiOutput = aiOutput.replace(/<[^>]*>/g, '');\n\n// Get context and config\nconst context = $('Build AI Context').first().json;\nconst config = $('Set Configuration').first().json;\n\n// Format current time\nconst now = new Date();\nconst dateStr = now.toLocaleDateString('en-US', {\n  weekday: 'long',\n  year: 'numeric',\n  month: 'long',\n  day: 'numeric'\n});\nconst timeStr = now.toLocaleTimeString('en-US', {\n  hour: 'numeric',\n  minute: '2-digit'\n});\n\n// Generate plain text version\nconst textOutput = `\n╔══════════════════════════════════════════════════════════════════════════════╗\n║  🎯 EXECUTIVE PRIORITY ALIGNMENT                                             ║\n║  Daily Clarity. Zero Decision Fatigue.                                       ║\n╚══════════════════════════════════════════════════════════════════════════════╝\n\n📅 ${dateStr}\n⏰ Generated at ${timeStr}\n👤 ${config.executiveName}\n\n════════════════════════════════════════════════════════════════════════════════\n\n${aiOutput}\n\n════════════════════════════════════════════════════════════════════════════════\n\n📈 DATA SOURCES ANALYZED:\n• Calendar Events: ${context.calendar?.summary?.totalEvents || 0} (${context.calendar?.summary?.todayCount || 0} today)\n• Emails Processed: ${context.emails?.summary?.totalEmails || 0} (${context.emails?.summary?.actionableCount || 0} actionable)\n• Tasks Reviewed: ${context.tasks?.summary?.totalTasks || 0} (${context.tasks?.summary?.overdueCount || 0} overdue)\n\n────────────────────────────────────────────────────────────────────────────────\nGenerated by Executive Priority Alignment Automation™\n${new Date().toLocaleString()}\n────────────────────────────────────────────────────────────────────────────────\n`;\n\n// ✅ Safe markdown to HTML conversion\nfunction formatMarkdown(md) {\n  if (typeof md !== 'string') {\n    md = JSON.stringify(md, null, 2);\n  }\n\n  // Remove any HTML tags if present\n  md = md.replace(/<[^>]*>/g, '');\n\n  // Convert markdown to basic HTML\n  let html = md\n    .replace(/^### (.*$)/gim, '<h3>$1</h3>')\n    .replace(/^## (.*$)/gim, '<h2>$1</h2>')\n    .replace(/\\*\\*(.*?)\\*\\*/gim, '<strong>$1</strong>')\n    .replace(/^- (.*$)/gim, '<li>$1</li>')\n    .replace(/• (.*$)/gim, '<li>$1</li>');\n\n  // Wrap remaining lines as <p> except for already formatted tags\n  html = html\n    .split('\\n')\n    .map(line => {\n      if (/^\\s*<(h[2-3]|li)>/.test(line.trim())) return line;\n      if (line.trim() === '') return '';\n      return `<p>${line}</p>`;\n    })\n    .join('\\n');\n\n  return html;\n}\n\nconst formattedAIHtml = formatMarkdown(aiOutput);\n\n// HTML report structure\nconst htmlOutput = `\n<!DOCTYPE html>\n<html>\n<head>\n  <style>\n    body {\n      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;\n      line-height: 1.6;\n      color: #1a1a1a;\n      max-width: 700px;\n      margin: 0 auto;\n      padding: 20px;\n      background: #f5f5f5;\n    }\n    .container {\n      background: white;\n      border-radius: 12px;\n      overflow: hidden;\n      box-shadow: 0 4px 6px rgba(0,0,0,0.1);\n    }\n    .header {\n      background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);\n      color: white;\n      padding: 30px;\n    }\n    .header h1 {\n      margin: 0 0 5px 0;\n      font-size: 28px;\n      font-weight: 700;\n    }\n    .header .tagline {\n      opacity: 0.9;\n      font-size: 14px;\n      margin-bottom: 15px;\n    }\n    .header .meta {\n      font-size: 14px;\n      opacity: 0.85;\n    }\n    .content {\n      padding: 30px;\n    }\n    .stats-grid {\n      display: grid;\n      grid-template-columns: repeat(2, 1fr);\n      gap: 15px;\n      margin: 20px 0;\n    }\n    .stat-card {\n      background: #f8fafc;\n      padding: 15px;\n      border-radius: 8px;\n      text-align: center;\n    }\n    .stat-card .number {\n      font-size: 24px;\n      font-weight: 700;\n      color: #2d5a87;\n    }\n    .stat-card .label {\n      font-size: 12px;\n      color: #666;\n      text-transform: uppercase;\n    }\n    .footer {\n      text-align: center;\n      color: #888;\n      font-size: 12px;\n      padding: 20px;\n      background: #f8fafc;\n      border-top: 1px solid #eee;\n    }\n    h2 { color: #1e3a5f; border-bottom: 2px solid #2d5a87; padding-bottom: 10px; }\n    h3 { color: #2d5a87; }\n    ul { padding-left: 20px; }\n    li { margin: 8px 0; }\n    strong { color: #1e3a5f; }\n    p { margin: 12px 0; }\n  </style>\n</head>\n<body>\n  <div class=\"container\">\n    <div class=\"header\">\n      <h1>🎯 Executive Priority Alignment</h1>\n      <div class=\"tagline\">Daily Clarity. Zero Decision Fatigue.</div>\n      <div class=\"meta\">\n        📅 ${dateStr} &nbsp;|&nbsp; ⏰ ${timeStr} &nbsp;|&nbsp; 👤 ${config.executiveName}\n      </div>\n    </div>\n\n    <div class=\"content\">\n      <div class=\"stats-grid\">\n        <div class=\"stat-card\">\n          <div class=\"number\">${context.dayHealth?.meetingLoad || 0}h</div>\n          <div class=\"label\">Meeting Load</div>\n        </div>\n        <div class=\"stat-card\">\n          <div class=\"number\">${context.dayHealth?.availableFocusHours || 0}h</div>\n          <div class=\"label\">Focus Time</div>\n        </div>\n        <div class=\"stat-card\">\n          <div class=\"number\">${context.dayHealth?.pendingDecisions || 0}</div>\n          <div class=\"label\">Pending Decisions</div>\n        </div>\n        <div class=\"stat-card\">\n          <div class=\"number\">${context.dayHealth?.overdueItems || 0}</div>\n          <div class=\"label\">Overdue Items</div>\n        </div>\n      </div>\n\n      ${formattedAIHtml}\n    </div>\n\n    <div class=\"footer\">\n      <strong>📈 Data Sources Analyzed</strong><br>\n      Calendar: ${context.calendar?.summary?.totalEvents || 0} events &nbsp;|&nbsp;\n      Emails: ${context.emails?.summary?.totalEmails || 0} messages &nbsp;|&nbsp;\n      Tasks: ${context.tasks?.summary?.totalTasks || 0} items<br><br>\n      Generated by Executive Priority Alignment Automation™\n    </div>\n  </div>\n</body>\n</html>\n`;\n\n// Final output\nreturn [{\n  json: {\n    executiveName: config.executiveName,\n    executiveEmail: config.executiveEmail,\n    date: dateStr,\n    time: timeStr,\n    priorities: aiOutput,\n    prioritiesText: textOutput,\n    prioritiesHtml: htmlOutput,\n    metrics: {\n      meetingLoad: context.dayHealth?.meetingLoad || 0,\n      focusTime: context.dayHealth?.availableFocusHours || 0,\n      pendingDecisions: context.dayHealth?.pendingDecisions || 0,\n      overdueItems: context.dayHealth?.overdueItems || 0,\n      criticalItems: context.dayHealth?.criticalItems || 0\n    },\n    dataSources: {\n      calendarEvents: context.calendar?.summary?.totalEvents || 0,\n      emailsProcessed: context.emails?.summary?.totalEmails || 0,\n      tasksReviewed: context.tasks?.summary?.totalTasks || 0\n    }\n  }\n}];\n"
+      },
+      "id": "2ed5ae9e-36c9-4f8f-b60b-5b9f78f9d304",
+      "name": "Format Priority Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        208
+      ],
+      "notes": "Formats the AI output into beautiful text and HTML versions"
+    },
+    {
+      "parameters": {
+        "sendTo": "=bryan.sumait@madeeas.com",
+        "subject": "={{ '🎯 Your Top 5 Priorities for ' + $json.date }}",
+        "message": "={{ $json.prioritiesHtml }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "5e46a03f-5447-4682-a2a9-caf1c068ba9d",
+      "name": "Email Priority Report",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1440,
+        64
+      ],
+      "webhookId": "30e36a5c-325a-420d-b93b-0e65261aceb8",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "s1ZMV4D5dRugM6rZ",
+          "name": "Gmail account"
+        }
+      },
+      "notes": "Sends the priority report to the executive's email"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Set Configuration').item.json.slackChannelId }}"
+        },
+        "text": "={{ '🎯 *' + $json.executiveName + \"'s Top 5 Priorities for Today*\\n\\n\" + $json.priorities }}",
+        "otherOptions": {
+          "mrkdwn": true
+        }
+      },
+      "id": "93618bfe-e8e8-49f4-bb2b-346af96d9287",
+      "name": "Post to Slack (Optional)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1440,
+        288
+      ],
+      "webhookId": "b196364f-59f9-4e56-81a9-941289bb2c3a",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "sVO4GNiXyKwqQS4G",
+          "name": "Slack account"
+        }
+      },
+      "disabled": true,
+      "notes": "OPTIONAL: Enable to post priorities to a Slack channel"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -432,
+        208
+      ],
+      "id": "0b51b32a-f987-4626-9d89-97e0c3a153a5",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 10,
+        "filters": {
+          "assignee": "1211006126703030",
+          "opt_fields": [
+            "gid",
+            "name",
+            "resource_type",
+            "due_at",
+            "permalink_url",
+            "projects",
+            "workspace",
+            "completed",
+            "completed_at",
+            "completed_by",
+            "created_at",
+            "dependents",
+            "dependencies",
+            "due_on",
+            "approval_status",
+            "assignee_status",
+            "start_on",
+            "assignee",
+            "html_notes",
+            "notes"
+          ],
+          "opt_pretty": true,
+          "workspace": "1210140662837988"
+        }
+      },
+      "type": "n8n-nodes-base.asana",
+      "typeVersion": 1,
+      "position": [
+        16,
+        400
+      ],
+      "id": "7e5e782d-1a4e-4259-9db1-a593484c63d9",
+      "name": "Get Open Tasks",
+      "credentials": {
+        "asanaApi": {
+          "id": "OImEgjRP3CCKfMFy",
+          "name": "HR Hiring"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-3.5-turbo",
+          "mode": "list",
+          "cachedResultName": "GPT-3.5-TURBO"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=Analyze the following data and generate today's TOP 5 PRIORITIES for {{ $json.executive.name }}.\\n\\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n🎯 STRATEGIC GOALS\\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n{{ $json.executive.strategicGoals?.map((g, i) => `${i+1}. ${g}`).join('\\\\n') }}\\n\\nPriority Weights: Urgency={{ $json.executive.priorityWeights?.urgency }}, Impact={{ $json.executive.priorityWeights?.impact }}, Strategic Alignment={{ $json.executive.priorityWeights?.strategicAlignment }}, Stakeholder Importance={{ $json.executive.priorityWeights?.stakeholderImportance }}\\n\\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n📅 TODAY'S CALENDAR ({{ $json.calendar.summary?.todayCount || 0 }} meetings, {{ $json.calendar.summary?.todayMeetingHours || 0 }} hours)\\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n{{ $json.calendar.todaySchedule?.map(e => `• ${e.startTimeFormatted}: ${e.title} (${e.durationHours}h) [${e.meetingType}] - Priority: ${e.prioritySignal}`).join('\\\\n') || 'No meetings today' }}\\n\\nCRITICAL MEETINGS (next 3 days):\\n{{ $json.calendar.criticalMeetings?.map(e => `• ${e.startTimeFormatted}: ${e.title} - ${e.attendeeCount} attendees`).join('\\\\n') || 'None' }}\\n\\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n📧 EMAIL STATUS ({{ $json.emails.summary?.unreadCount || 0 }} unread, {{ $json.emails.summary?.actionableCount || 0 }} require action)\\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\nApprovals Needed: {{ $json.emails.summary?.byCategory?.approvalNeeded || 0 }}\\nDecisions Needed: {{ $json.emails.summary?.byCategory?.decisionNeeded || 0 }}\\nRequests: {{ $json.emails.summary?.byCategory?.requests || 0 }}\\n\\nCRITICAL/URGENT EMAILS:\\n{{ $json.emails.criticalEmails?.map(e => `• [${e.urgencyLevel.toUpperCase()}] From: ${e.senderName}\\\\n  Subject: ${e.subject}\\\\n  Category: ${e.category}`).join('\\\\n\\\\n') || 'None' }}\\n\\nACTIONABLE EMAILS:\\n{{ $json.emails.actionableEmails?.map(e => `• [${e.category}] ${e.subject} - from ${e.senderName}`).join('\\\\n') || 'None' }}\\n\\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n✅ TASK STATUS ({{ $json.tasks.summary?.totalTasks || 0 }} open tasks)\\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\nOverdue: {{ $json.tasks.summary?.overdueCount || 0 }}\\nDue Today: {{ $json.tasks.summary?.dueTodayCount || 0 }}\\nDue This Week: {{ $json.tasks.summary?.dueThisWeekCount || 0 }}\\n\\nOVERDUE TASKS:\\n{{ $json.tasks.overdueTasks?.map(t => `• ⚠️ ${t.title} (was due: ${t.dueDateFormatted})`).join('\\\\n') || 'None - great job!' }}\\n\\nDUE TODAY:\\n{{ $json.tasks.todayTasks?.map(t => `• ${t.title} [${t.category}]`).join('\\\\n') || 'None' }}\\n\\nCRITICAL TASKS:\\n{{ $json.tasks.criticalTasks?.map(t => `• ${t.title} - Due: ${t.dueDateFormatted}`).join('\\\\n') || 'None' }}\\n\\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n📊 DAY HEALTH METRICS\\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n• Meeting Load: {{ $json.dayHealth.meetingLoad }} hours\\n• Available Focus Time: {{ $json.dayHealth.availableFocusHours }} hours\\n• Pending Decisions: {{ $json.dayHealth.pendingDecisions }}\\n• Overdue Items: {{ $json.dayHealth.overdueItems }}\\n• Critical Items Total: {{ $json.dayHealth.criticalItems }}\\n\\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\n\\nBased on this analysis, generate {{ $json.executive.name }}'s TOP 5 PRIORITIES for today. Be decisive and strategic."
+            },
+            {
+              "content": "=You are an elite executive chief of staff AI that helps busy executives identify their TOP 5 PRIORITIES for the day. Your role is to cut through the noise and surface what truly matters.\\n\\nYour analysis must be:\\n- DECISIVE: Give clear, actionable priorities, not suggestions\\n- STRATEGIC: Align priorities with stated strategic goals\\n- REALISTIC: Consider available time and meeting load\\n- IMPACTFUL: Focus on high-leverage activities\\n\\nOUTPUT FORMAT (use exactly this structure):\\n\\n## 🎯 TODAY'S TOP 5 PRIORITIES\\n\\nFor each priority (numbered 1-5):\\n### [#]. [Priority Title]\\n**Why Now:** [1 sentence on urgency/importance]\\n**Action:** [Specific action to take]\\n**Time Needed:** [Estimated minutes/hours]\\n**Strategic Alignment:** [Which strategic goal this supports]\\n\\n## ⚠️ CRITICAL ALERTS\\n[List any overdue items, critical meetings, or urgent decisions that need immediate attention - max 3 items]\\n\\n## 📊 DAY SNAPSHOT\\n- Meeting Load: [X hours] | Focus Time: [Y hours]\\n- Pending Decisions: [count]\\n- Overdue Items: [count]\\n- Emails Requiring Action: [count]\\n\\n## 💡 STRATEGIC RECOMMENDATION\\n[One paragraph on how to approach the day for maximum impact, considering the executive's strategic goals]\\n\\nPRINCIPLES FOR PRIORITY SELECTION:\\n1. Overdue items and deadlines come first\\n2. High-stakes decisions and approvals take precedence\\n3. External commitments (clients, board, partners) are non-negotiable\\n4. Strategic initiatives should get protected focus time\\n5. Delegate or defer low-impact tasks\\n\\nBe direct and confident. Executives need clarity, not options.",
+              "role": "system"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        896,
+        208
+      ],
+      "id": "37c94cd5-f928-4280-8d83-e00375dd9410",
+      "name": "Generate Top 5 Priorities",
+      "credentials": {
+        "openAiApi": {
+          "id": "CrrU5RjoDbhVoiLi",
+          "name": "Prince"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        512,
+        192
+      ],
+      "id": "d8fa7fda-4a50-41dc-93bd-05e41b5785e0",
+      "name": "Merge All Data"
+    },
+    {
+      "parameters": {
+        "content": "## Suggestions\n\n\nGet all Priorities and Summarizes and Create a To do list for it.",
+        "height": 240
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        560,
+        -240
+      ],
+      "typeVersion": 1,
+      "id": "62c62cfc-1097-4862-8d4a-6338c5152753",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Instead sending directly via email. \n\nSend it to the person incharge then put it in a doc format.",
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1392,
+        -96
+      ],
+      "typeVersion": 1,
+      "id": "aba38f7d-ac8c-45e0-90fa-68144282da5a",
+      "name": "Sticky Note11"
+    }
+  ],
+  "connections": {
+    "Get Calendar (3 Days)": {
+      "main": [
+        [
+          {
+            "node": "Process Calendar Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Priority Emails": {
+      "main": [
+        [
+          {
+            "node": "Process Priority Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Configuration": {
+      "main": [
+        [
+          {
+            "node": "Get Calendar (3 Days)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Priority Emails",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Open Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Calendar Events": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Priority Emails": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Process Tasks": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Build AI Context": {
+      "main": [
+        [
+          {
+            "node": "Generate Top 5 Priorities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Priority Report": {
+      "main": [
+        [
+          {
+            "node": "Email Priority Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Post to Slack (Optional)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Open Tasks": {
+      "main": [
+        [
+          {
+            "node": "Process Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Top 5 Priorities": {
+      "main": [
+        [
+          {
+            "node": "Format Priority Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge All Data": {
+      "main": [
+        [
+          {
+            "node": "Build AI Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {
+    "Get Calendar (3 Days)": [
+      {
+        "id": "1cdj6hg8qfln6q79jvggdh26op_20251201T100000Z",
+        "summary": "Mtg w/ Team - Round-up Discussion",
+        "start": {
+          "dateTime": "2025-12-01T18:00:00+08:00",
+          "timeZone": "Asia/Dubai"
+        },
+        "end": {
+          "dateTime": "2025-12-01T19:00:00+08:00",
+          "timeZone": "Asia/Dubai"
+        },
+        "attendees": [
+          {
+            "email": "bella.nino@madeeas.com",
+            "responseStatus": "needsAction"
+          },
+          {
+            "email": "reich.rellora@madeeas.com",
+            "responseStatus": "needsAction"
+          },
+          {
+            "email": "princeacquahandam@gmail.com",
+            "organizer": true,
+            "responseStatus": "accepted"
+          },
+          {
+            "email": "fayme.magallanes@madeeas.com",
+            "responseStatus": "needsAction"
+          },
+          {
+            "email": "bryan.sumait@madeeas.com",
+            "self": true,
+            "responseStatus": "needsAction"
+          },
+          {
+            "email": "rowena.petran@madeeas.com",
+            "responseStatus": "needsAction"
+          },
+          {
+            "email": "angelica.roma@madeeas.com",
+            "responseStatus": "needsAction"
+          },
+          {
+            "email": "rowenarosepetran@gmail.com",
+            "responseStatus": "needsAction"
+          },
+          {
+            "email": "joel.ysmael@madeeas.com",
+            "responseStatus": "needsAction"
+          }
+        ],
+        "creator": {
+          "email": "princeacquahandam@gmail.com"
+        },
+        "organizer": {
+          "email": "princeacquahandam@gmail.com"
+        },
+        "created": "2025-11-03T12:29:44.000Z",
+        "updated": "2025-11-03T12:30:10.720Z",
+        "conferenceData": {
+          "entryPoints": [
+            {
+              "entryPointType": "video",
+              "uri": "https://meet.google.com/rpf-dgpv-kma",
+              "label": "meet.google.com/rpf-dgpv-kma"
+            }
+          ],
+          "conferenceSolution": {
+            "key": {
+              "type": "hangoutsMeet"
+            },
+            "name": "Google Meet",
+            "iconUri": "https://fonts.gstatic.com/s/i/productlogos/meet_2020q4/v6/web-512dp/logo_meet_2020q4_color_2x_web_512dp.png"
+          },
+          "conferenceId": "rpf-dgpv-kma"
+        },
+        "etag": "\"3524346021441022\"",
+        "eventType": "default",
+        "hangoutLink": "https://meet.google.com/rpf-dgpv-kma",
+        "htmlLink": "https://www.google.com/calendar/event?eid=MWNkajZoZzhxZmxuNnE3OWp2Z2dkaDI2b3BfMjAyNTEyMDFUMTAwMDAwWiBicnlhbi5zdW1haXRAbWFkZWVhcy5jb20",
+        "iCalUID": "1cdj6hg8qfln6q79jvggdh26op@google.com",
+        "kind": "calendar#event",
+        "originalStartTime": {
+          "dateTime": "2025-12-01T18:00:00+08:00",
+          "timeZone": "Asia/Dubai"
+        },
+        "recurringEventId": "1cdj6hg8qfln6q79jvggdh26op",
+        "reminders": {
+          "useDefault": true
+        },
+        "sequence": 1,
+        "status": "confirmed"
+      }
+    ],
+    "Get Open Tasks": [
+      {
+        "gid": "1211006257466008",
+        "assignee": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "assignee_status": "inbox",
+        "completed": true,
+        "completed_at": "2025-08-11T05:37:07.304Z",
+        "completed_by": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "created_at": "2025-08-08T10:12:10.198Z",
+        "dependencies": [],
+        "dependents": [],
+        "due_at": null,
+        "due_on": "2025-08-08",
+        "html_notes": "<body>This is a placeholder task created for you</body>",
+        "name": "Create google forms analyze EAs pain points",
+        "notes": "This is a placeholder task created for you",
+        "permalink_url": "https://app.asana.com/1/1210140662837988/task/1211006257466008",
+        "projects": [],
+        "resource_type": "task",
+        "start_on": null,
+        "workspace": {
+          "gid": "1210140662837988",
+          "resource_type": "workspace"
+        }
+      },
+      {
+        "gid": "1211006257466010",
+        "assignee": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "assignee_status": "inbox",
+        "completed": true,
+        "completed_at": "2025-08-12T01:01:57.327Z",
+        "completed_by": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "created_at": "2025-08-08T10:12:10.327Z",
+        "dependencies": [],
+        "dependents": [],
+        "due_at": null,
+        "due_on": "2025-08-11",
+        "html_notes": "<body>This is a placeholder task created for you</body>",
+        "name": "Create Custom GPT w/ the Approved Docs",
+        "notes": "This is a placeholder task created for you",
+        "permalink_url": "https://app.asana.com/1/1210140662837988/task/1211006257466010",
+        "projects": [],
+        "resource_type": "task",
+        "start_on": null,
+        "workspace": {
+          "gid": "1210140662837988",
+          "resource_type": "workspace"
+        }
+      },
+      {
+        "gid": "1211006257466012",
+        "assignee": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "assignee_status": "inbox",
+        "completed": false,
+        "completed_at": null,
+        "completed_by": null,
+        "created_at": "2025-08-08T10:12:10.442Z",
+        "dependencies": [],
+        "dependents": [],
+        "due_at": null,
+        "due_on": "2025-08-12",
+        "html_notes": "<body>This is a placeholder task created for you</body>",
+        "name": "Task 3",
+        "notes": "This is a placeholder task created for you",
+        "permalink_url": "https://app.asana.com/1/1210140662837988/task/1211006257466012",
+        "projects": [],
+        "resource_type": "task",
+        "start_on": null,
+        "workspace": {
+          "gid": "1210140662837988",
+          "resource_type": "workspace"
+        }
+      },
+      {
+        "gid": "1211080179326678",
+        "assignee": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "assignee_status": "inbox",
+        "completed": true,
+        "completed_at": "2025-09-03T14:06:50.620Z",
+        "completed_by": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "created_at": "2025-08-18T13:49:45.982Z",
+        "dependencies": [],
+        "dependents": [],
+        "due_at": null,
+        "due_on": "2025-08-29",
+        "html_notes": "<body></body>",
+        "name": "AI Automation",
+        "notes": "",
+        "permalink_url": "https://app.asana.com/1/1210140662837988/project/1210436074295174/task/1211080179326678",
+        "projects": [
+          {
+            "gid": "1210436074295174",
+            "resource_type": "project"
+          },
+          {
+            "gid": "1211079747468859",
+            "resource_type": "project"
+          }
+        ],
+        "resource_type": "task",
+        "start_on": null,
+        "workspace": {
+          "gid": "1210140662837988",
+          "resource_type": "workspace"
+        }
+      },
+      {
+        "gid": "1211100827309856",
+        "assignee": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "assignee_status": "inbox",
+        "completed": true,
+        "completed_at": "2025-09-03T14:06:43.108Z",
+        "completed_by": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "created_at": "2025-08-20T10:41:50.498Z",
+        "dependencies": [],
+        "dependents": [],
+        "due_at": null,
+        "due_on": "2025-08-29",
+        "html_notes": "<body>🎯 CLIENT COMMUNICATION PREFERENCES\n\n📋 CLIENT DETAILS:\n- Name: Bryan Sumait\n- Company: Bryan Sumait  \n- Project/Service: Sample\n- Email: <a href=\"mailto:bryan.sumait@madeeas.com\" target=\"_blank\" rel=\"noreferrer noopener\">bryan.sumait@madeeas.com</a>\n- Phone: 09983294043\n\n📞 COMMUNICATION PREFERENCES:\n- Primary Method: Project management tool notifications, Slack messaging\n- Secondary Method: Text Messages\n- Best Days: Weekdays only\n- Preferred Time: Business hours only\n- Time Zone: PST\n\n📊 UPDATE PREFERENCES:\n- Frequency: Every 2-3 days\n- Format: Meeting/presentation\n- Detail Level: Technical details included\n- Response Time Expectation: Within 24 hours\n\n🚨 URGENCY CONTACT:\n- Urgent Communication Method: Multiple methods\n\n👥 MEETING PREFERENCES:\n- Meeting Style: Video calls preferred\n- File Sharing: Google Drive links\n\n📝 SPECIAL NOTES:\n- Communication Don'ts: \n- Special Requirements: \n- Additional Notes: \n\n✅ ACTION ITEMS:\n- [ ] Update client profile in CRM\n- [ ] Configure notification settings\n- [ ] Set up preferred communication channels\n- [ ] Schedule initial check-in using preferred method\n- [ ] Add to appropriate communication frequency list\n\n🔗 Form Response: <a href=\"https://docs.google.com/spreadsheets/d/1DyUi-NpddDRx4E9YjT0X1qVH_x5uw_JtAGxjHUAFzqA/edit?usp=sharing\">https://docs.google.com/spreadsheets/d/1DyUi-NpddDRx4E9YjT0X1qVH_x5uw_JtAGxjHUAFzqA/edit?usp=sharing</a>\n\n</body>",
+        "name": "Communication Preferences - Bryan Sumait - MadeEA (AUTOMATION TEST)",
+        "notes": "🎯 CLIENT COMMUNICATION PREFERENCES\n\n📋 CLIENT DETAILS:\n- Name: Bryan Sumait\n- Company: Bryan Sumait  \n- Project/Service: Sample\n- Email: bryan.sumait@madeeas.com\n- Phone: 09983294043\n\n📞 COMMUNICATION PREFERENCES:\n- Primary Method: Project management tool notifications, Slack messaging\n- Secondary Method: Text Messages\n- Best Days: Weekdays only\n- Preferred Time: Business hours only\n- Time Zone: PST\n\n📊 UPDATE PREFERENCES:\n- Frequency: Every 2-3 days\n- Format: Meeting/presentation\n- Detail Level: Technical details included\n- Response Time Expectation: Within 24 hours\n\n🚨 URGENCY CONTACT:\n- Urgent Communication Method: Multiple methods\n\n👥 MEETING PREFERENCES:\n- Meeting Style: Video calls preferred\n- File Sharing: Google Drive links\n\n📝 SPECIAL NOTES:\n- Communication Don'ts: \n- Special Requirements: \n- Additional Notes: \n\n✅ ACTION ITEMS:\n- [ ] Update client profile in CRM\n- [ ] Configure notification settings\n- [ ] Set up preferred communication channels\n- [ ] Schedule initial check-in using preferred method\n- [ ] Add to appropriate communication frequency list\n\n🔗 Form Response: https://docs.google.com/spreadsheets/d/1DyUi-NpddDRx4E9YjT0X1qVH_x5uw_JtAGxjHUAFzqA/edit?usp=sharing\n\n",
+        "permalink_url": "https://app.asana.com/1/1210140662837988/project/1210436074295174/task/1211100827309856",
+        "projects": [
+          {
+            "gid": "1210436074295174",
+            "resource_type": "project"
+          },
+          {
+            "gid": "1211079747468859",
+            "resource_type": "project"
+          }
+        ],
+        "resource_type": "task",
+        "start_on": null,
+        "workspace": {
+          "gid": "1210140662837988",
+          "resource_type": "workspace"
+        }
+      },
+      {
+        "gid": "1211089685527795",
+        "assignee": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "assignee_status": "inbox",
+        "completed": true,
+        "completed_at": "2025-09-03T14:06:27.863Z",
+        "completed_by": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "created_at": "2025-08-19T10:07:21.434Z",
+        "dependencies": [],
+        "dependents": [],
+        "due_at": null,
+        "due_on": "2025-08-29",
+        "html_notes": "<body>Automatically sends welcome email, shares onboarding docs, schedules call, and sets up shared folders when a new client signs up.\n\nRequirements: Trigger, for now I used PandaDoc for the signed documents (we can find alternatives based on MadeEAs preference).</body>",
+        "name": "Client Onboarding Automation",
+        "notes": "Automatically sends welcome email, shares onboarding docs, schedules call, and sets up shared folders when a new client signs up.\n\nRequirements: Trigger, for now I used PandaDoc for the signed documents (we can find alternatives based on MadeEAs preference).",
+        "permalink_url": "https://app.asana.com/1/1210140662837988/project/1210436074295174/task/1211089685527795",
+        "projects": [
+          {
+            "gid": "1210436074295174",
+            "resource_type": "project"
+          },
+          {
+            "gid": "1211079747468859",
+            "resource_type": "project"
+          }
+        ],
+        "resource_type": "task",
+        "start_on": null,
+        "workspace": {
+          "gid": "1210140662837988",
+          "resource_type": "workspace"
+        }
+      },
+      {
+        "gid": "1211089685527789",
+        "assignee": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "assignee_status": "inbox",
+        "completed": true,
+        "completed_at": "2025-09-03T14:06:21.299Z",
+        "completed_by": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "created_at": "2025-08-19T10:06:52.933Z",
+        "dependencies": [],
+        "dependents": [],
+        "due_at": null,
+        "due_on": "2025-08-29",
+        "html_notes": "<body>Sends a short survey to clients at the end of each month and stores responses in a spreadsheet for review.</body>",
+        "name": "Automated Client Feedback Collection\n",
+        "notes": "Sends a short survey to clients at the end of each month and stores responses in a spreadsheet for review.",
+        "permalink_url": "https://app.asana.com/1/1210140662837988/project/1210436074295174/task/1211089685527789",
+        "projects": [
+          {
+            "gid": "1210436074295174",
+            "resource_type": "project"
+          },
+          {
+            "gid": "1211079747468859",
+            "resource_type": "project"
+          }
+        ],
+        "resource_type": "task",
+        "start_on": null,
+        "workspace": {
+          "gid": "1210140662837988",
+          "resource_type": "workspace"
+        }
+      },
+      {
+        "gid": "1211089685527786",
+        "assignee": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "assignee_status": "inbox",
+        "completed": true,
+        "completed_at": "2025-09-03T14:06:12.749Z",
+        "completed_by": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "created_at": "2025-08-19T10:03:19.987Z",
+        "dependencies": [],
+        "dependents": [],
+        "due_at": null,
+        "due_on": "2025-08-29",
+        "html_notes": "<body>Sends automated invoice and follow-up payment reminders\n\n7-day advance\nDue day\n7-day overdue notice\n\n\nNOTE: I used Zoho Books for now for the invoice. We can change it once we have the MadeEA approved invoice tool.</body>",
+        "name": "Invoice & Payment Reminder Flow",
+        "notes": "Sends automated invoice and follow-up payment reminders\n\n7-day advance\nDue day\n7-day overdue notice\n\n\nNOTE: I used Zoho Books for now for the invoice. We can change it once we have the MadeEA approved invoice tool.",
+        "permalink_url": "https://app.asana.com/1/1210140662837988/project/1210436074295174/task/1211089685527786",
+        "projects": [
+          {
+            "gid": "1210436074295174",
+            "resource_type": "project"
+          },
+          {
+            "gid": "1211079747468859",
+            "resource_type": "project"
+          }
+        ],
+        "resource_type": "task",
+        "start_on": null,
+        "workspace": {
+          "gid": "1210140662837988",
+          "resource_type": "workspace"
+        }
+      },
+      {
+        "gid": "1211718975051072",
+        "assignee": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "assignee_status": "inbox",
+        "completed": true,
+        "completed_at": "2025-11-07T11:16:45.915Z",
+        "completed_by": null,
+        "created_at": "2025-10-22T12:48:57.877Z",
+        "dependencies": [],
+        "dependents": [],
+        "due_at": null,
+        "due_on": "2025-11-06",
+        "html_notes": "<body></body>",
+        "name": "Image gen",
+        "notes": "",
+        "permalink_url": "https://app.asana.com/1/1210140662837988/project/1210436074295174/task/1211718975051072",
+        "projects": [
+          {
+            "gid": "1210436074295174",
+            "resource_type": "project"
+          },
+          {
+            "gid": "1211079747468859",
+            "resource_type": "project"
+          },
+          {
+            "gid": "1211649417187259",
+            "resource_type": "project"
+          }
+        ],
+        "resource_type": "task",
+        "start_on": null,
+        "workspace": {
+          "gid": "1210140662837988",
+          "resource_type": "workspace"
+        }
+      },
+      {
+        "gid": "1211718974510733",
+        "assignee": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "assignee_status": "inbox",
+        "completed": true,
+        "completed_at": "2025-11-13T07:17:45.984Z",
+        "completed_by": {
+          "gid": "1211006126703030",
+          "resource_type": "user"
+        },
+        "created_at": "2025-10-22T12:47:59.018Z",
+        "dependencies": [],
+        "dependents": [],
+        "due_at": null,
+        "due_on": "2025-11-10",
+        "html_notes": "<body></body>",
+        "name": "Hubspot Automation",
+        "notes": "",
+        "permalink_url": "https://app.asana.com/1/1210140662837988/project/1210436074295174/task/1211718974510733",
+        "projects": [
+          {
+            "gid": "1210436074295174",
+            "resource_type": "project"
+          },
+          {
+            "gid": "1211079747468859",
+            "resource_type": "project"
+          },
+          {
+            "gid": "1211649417187259",
+            "resource_type": "project"
+          }
+        ],
+        "resource_type": "task",
+        "start_on": null,
+        "workspace": {
+          "gid": "1210140662837988",
+          "resource_type": "workspace"
+        }
+      }
+    ]
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "1a78162823e5db613f1a643112f709af771e976f8a926aa9b3e26e43d71b7f51"
+  }
+}

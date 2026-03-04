@@ -21,10 +21,10 @@ exports.handler = async (event) => {
         const decoded = jwt.verify(token, jwtSecret);
         const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
-        // Get user's Google token to revoke
+        // Get user's tokens to revoke
         const { data: user } = await supabase
             .from('users')
-            .select('google_access_token')
+            .select('google_access_token, microsoft_access_token')
             .eq('id', decoded.userId)
             .single();
 

@@ -1,0 +1,540 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            }
+          ]
+        }
+      },
+      "id": "3cd51091-bd56-45b2-85d5-de069d1ffdee",
+      "name": "Daily 8AM Trigger2",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -976,
+        2304
+      ],
+      "webhookId": "",
+      "notes": "Triggers every day at 8:00 AM (adjust timezone in workflow settings)"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "simple": false,
+        "filters": {
+          "labelIds": [
+            "IMPORTANT"
+          ],
+          "receivedAfter": "={{ new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() }}"
+        },
+        "options": {}
+      },
+      "id": "d2d76c82-3bf0-4758-afde-25dc5cde26f3",
+      "name": "Get Last 24h Emails2",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -768,
+        2304
+      ],
+      "webhookId": "5483fa5a-1d29-4b5c-a213-28e1f18b6d11",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "HMuL6SlADU6HtS43",
+          "name": "Bryan Gmail"
+        }
+      },
+      "notes": "Fetches emails from the last 24 hours from INBOX"
+    },
+    {
+      "parameters": {
+        "content": "## Get emails labeled with \"IMPORTANT\"",
+        "height": 176,
+        "width": 256
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -848,
+        2144
+      ],
+      "id": "51837c7f-9115-463d-8c4c-f86b31f49d46",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "inputText": "={{ $json.text }}",
+        "categories": {
+          "categories": [
+            {
+              "category": "High-priority",
+              "description": "=Emails that require immediate attention from senior leadership. Includes: messages from C-suite executives, board members, or key stakeholders; emails marked as urgent or important; direct requests specifically addressed to the executive; critical business matters involving contracts, legal issues, or financial decisions; and communications that could impact major projects or strategic initiatives."
+            },
+            {
+              "category": "Action-required",
+              "description": "=Emails that explicitly request a specific action, decision, or response from the recipient. Includes: approval requests; decision-making items; questions requiring answers; tasks or assignments delegated to the executive; documents awaiting review or signature; meeting RSVPs; and any message containing phrases like 'please approve,' 'need your input,' 'can you,' 'waiting for your,' or ending with question marks."
+            },
+            {
+              "category": "Follow-up",
+              "description": "=Emails that are part of ongoing conversations where the executive is waiting for a response or needs to follow up. Includes: threads where the executive sent the last message but hasn't received a reply; pending requests the executive made to others; items marked for future follow-up; conversations that require checking back after a specific timeframe; and responses that indicate 'will get back to you' or 'looking into this."
+            },
+            {
+              "category": "Upcoming deadlines",
+              "description": "=Emails that mention specific dates, timeframes, or time-sensitive requirements. Includes: explicit deadline mentions (due by, deadline is, must be completed by); time-bound requests (EOD, end of week, by Friday); upcoming meeting dates and times; project milestones with dates; expiring offers or time-limited opportunities; and any content containing date formats, urgency phrases like 'ASAP,' 'time-sensitive,' or countdown language."
+            }
+          ]
+        },
+        "options": {
+          "multiClass": false,
+          "fallback": "other",
+          "systemPromptTemplate": "Please classify the text provided by the user into one of the following categories: {categories}, and it should be only one result category."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.textClassifier",
+      "typeVersion": 1.1,
+      "position": [
+        -512,
+        2256
+      ],
+      "id": "55e71150-4ad4-4c8c-93fd-aefd9d361195",
+      "name": "Text Classifier"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        -512,
+        2544
+      ],
+      "id": "9f8683b5-8d60-4dfe-8c74-08a0796d4697",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "CrrU5RjoDbhVoiLi",
+          "name": "Prince"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 4
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        544,
+        2256
+      ],
+      "id": "b48fc76a-0ed0-44d9-a3b2-3bb2bc6751b1",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "content": "## just in case there's a duplicate result, we remove it.\n\n- because somtimes the previous node text classifier has multiple result.\n\nFor example:\nan email message can be \"highPriority\" and \"actionRequired\".\n ",
+        "height": 304,
+        "width": 432
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        656,
+        2048
+      ],
+      "id": "054a49ed-d15b-4d61-8c18-e37b634e6364",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// return $input.all().map(item => ({ id: item.json.id }));\n\n\n// removes duplicate\nreturn $input.all().map(item => ({ ...item.json, category: \"highPriority\" }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        2096
+      ],
+      "id": "27461196-42b4-44ae-bafe-793839d34460",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// return $input.all().map(item => ({ id: item.json.id }));\n\n\n// removes duplicate\nreturn $input.all().map(item => ({ ...item.json, category: \"actionRequired\" }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        2240
+      ],
+      "id": "48fbe8cf-8024-4d35-b9e3-4c147d452f0f",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// return $input.all().map(item => ({ id: item.json.id }));\n\n\n// removes duplicate\nreturn $input.all().map(item => ({ ...item.json, category: \"followUp\" }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        2384
+      ],
+      "id": "5c33e976-80b3-4c37-a431-9d7adce5c083",
+      "name": "Code in JavaScript3"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// return $input.all().map(item => ({ id: item.json.id }));\n\n\n// removes duplicate\nreturn $input.all().map(item => ({ ...item.json, category: \"deadlines\" }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        2512
+      ],
+      "id": "ac05029c-5d95-4702-9022-7f5327204b38",
+      "name": "Code in JavaScript4"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process all emails and categorize them\nconst emails = $input.all();\n\nconst categories = {\n  highPriority: [],\n  actionRequired: [],\n  followUp: [],\n  deadlines: []\n};\n\nfor (const email of emails) {\n  const json = email.json;\n  const snippet = json.text?.toLowerCase() || '';\n  const subject = json.subject || 'No Subject';\n  const from = json.from.text || 'Unknown Sender';\n  const date = email.json.headers.date.replace(\"Date: \", \"\").replace(/\\s+(GMT|UTC|\\+\\d{4})$/, \"\");\n  \n  const emailData = {\n    from: from,\n    subject: subject,\n    snippet: email.json.text?.substring(0, 150) + '...',\n    date: date,\n    id: json.id,\n    threadId: json.threadId,\n    labels: json.labelIds || []\n  };\n  \n  // Categorize based on keywords and labels\nconsole.log(json.category)\n  // highPriority\n  if (json.category == \"highPriority\") {\n    categories.highPriority.push(emailData);\n  }\n\n  // actionRequired\n  if (json.category == \"actionRequired\") {\n    categories.actionRequired.push(emailData);\n  }\n\n  // followUp\n  if (json.category == \"followUp\") {\n    categories.followUp.push(emailData);\n  }\n\n  // deadlines\n  if (json.category == \"deadlines\") {\n    categories.deadlines.push(emailData);\n  }\n}\n\n// Remove duplicates (emails that appear in multiple categories)\nconst uniqueEmails = new Map();\nObject.values(categories).flat().forEach(email => {\n  uniqueEmails.set(email.id, email);\n});\n\nreturn [\n  {\n    json: {\n      categories: categories,\n      totalEmails: emails.length,\n      categorizedCount: uniqueEmails.size,\n      generatedDate: new Date().toLocaleString()\n    }\n  }\n];"
+      },
+      "id": "d847502f-098d-4ec0-bb25-b0ced782fead",
+      "name": "Categorize Emails3",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        2288
+      ],
+      "notes": "Categorizes emails into: High Priority, Action Required, Follow-ups, Deadlines"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate HTML Email Summary\nconst data = $input.first().json;\nconst categories = data.categories;\n\nfunction generateEmailSection(title, emails, emoji) {\n  if (emails.length === 0) {\n    return '';\n  }\n  \n  let section = `\n    <div style=\"margin-bottom: 30px;\">\n      <h2 style=\"color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; font-size: 20px;\">\n        ${emoji} ${title} (${emails.length})\n      </h2>\n      <table style=\"width: 100%; border-collapse: collapse; margin-top: 15px;\">\n  `;\n  \n  emails.forEach((email, index) => {\n    console.log(email);\n    const bgColor = index % 2 === 0 ? '#f8f9fa' : '#ffffff';\n    \n    // Safely extract values with fallbacks\n\n    const fromText = email.from.replace(\"<\", \"\").replace(\">\", \"\") || email.from?.value?.[0]?.address || '[No sender]';\n    const subject = email.subject || '[No subject]';\n    const snippet = email.snippet || 'No preview available';\n    const date = email.date !== 'Invalid Date' ? email.date : new Date(email.date).toLocaleString();\n    const splitted_date = date.split(\" \")\n    splitted_date.pop()\n\n\n    const emailLink = `https://mail.google.com/mail/u/0/#inbox/${email.id}`;\n    \n    section += `\n      <tr style=\"background-color: ${bgColor};\">\n        <td style=\"padding: 15px; border-bottom: 1px solid #dee2e6;\">\n          <div style=\"margin-bottom: 8px;\">\n            <a href=\"${emailLink}\" style=\"color: #2c3e50; font-size: 16px; text-decoration: none; font-weight: bold;\" target=\"_blank\">\n              ${subject}\n            </a>\n          </div>\n          <div style=\"margin-bottom: 5px; color: #666; font-size: 14px;\">\n            <strong>From:</strong> ${fromText}\n          </div>\n          <div style=\"margin-bottom: 8px; color: #888; font-size: 13px;\">\n            <strong>Date:</strong> ${splitted_date.join(\" \")}\n          </div>\n          <div style=\"color: #555; font-size: 14px; line-height: 1.5;\">\n            ${snippet}\n          </div>\n          <div style=\"margin-top: 10px;\">\n            <a href=\"${emailLink}\" style=\"color: #3498db; font-size: 13px; text-decoration: none;\" target=\"_blank\">\n              📧 View in Gmail →\n            </a>\n          </div>\n        </td>\n      </tr>\n    `;\n  });\n  \n  section += `\n      </table>\n    </div>\n  `;\n  \n  return section;\n}\n\nconst htmlContent = `\n<!DOCTYPE html>\n<html>\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n</head>\n<body style=\"font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f4f4f4;\">\n  <div style=\"background-color: white; border-radius: 8px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);\">\n    \n    <!-- Header -->\n    <div style=\"text-align: center; margin-bottom: 30px; border-bottom: 4px solid #3498db; padding-bottom: 20px;\">\n      <h1 style=\"color: #2c3e50; margin: 0; font-size: 28px;\">📧 Executive Inbox Summary</h1>\n      <p style=\"color: #7f8c8d; margin-top: 10px; font-size: 16px;\">${data.generatedDate}</p>\n      <p style=\"color: #95a5a6; font-size: 14px; margin-top: 5px;\">\n        Total Emails: ${data.totalEmails} | Categorized: ${data.categorizedCount}\n      </p>\n    </div>\n    \n    ${generateEmailSection('High Priority Messages', categories.highPriority, '🔴')}\n    ${generateEmailSection('Action Required', categories.actionRequired, '⚡')}\n    ${generateEmailSection('Follow-Up Reminders', categories.followUp, '🔄')}\n    ${generateEmailSection('Upcoming Deadlines', categories.deadlines, '⏰')}\n    \n    ${data.categorizedCount === 0 ? `\n      <div style=\"text-align: center; padding: 40px; background-color: #e8f5e9; border-radius: 8px;\">\n        <h2 style=\"color: #4caf50; margin: 0;\">✅ All Clear!</h2>\n        <p style=\"color: #66bb6a; margin-top: 10px;\">No priority emails require your attention today.</p>\n      </div>\n    ` : ''}\n    \n    <!-- Footer -->\n    <div style=\"margin-top: 40px; padding-top: 20px; border-top: 2px solid #ecf0f1; text-align: center;\">\n      <p style=\"color: #95a5a6; font-size: 13px; margin: 0;\">\n        🤖 Generated by Executive Summary Inbox Automation™\n      </p>\n      <p style=\"color: #bdc3c7; font-size: 12px; margin-top: 8px;\">\n        Powered by n8n Workflow Automation\n      </p>\n    </div>\n    \n  </div>\n</body>\n</html>\n`;\n\nreturn [\n  {\n    json: {\n      html: htmlContent,\n      subject: `📧 Daily Inbox Summary - ${new Date().toLocaleDateString()} (${data.categorizedCount} items)`,\n      summary: {\n        totalEmails: data.totalEmails,\n        categorizedCount: data.categorizedCount,\n        highPriority: categories.highPriority.length,\n        actionRequired: categories.actionRequired.length,\n        followUp: categories.followUp.length,\n        deadlines: categories.deadlines.length\n      }\n    }\n  }\n];"
+      },
+      "id": "5abc490f-b9fa-4337-bc64-b4df2976923c",
+      "name": "Generate HTML Summary3",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1616,
+        2288
+      ],
+      "notes": "Creates beautiful HTML email with categorized summaries"
+    },
+    {
+      "parameters": {
+        "sendTo": "bryan.sumait@madeeas.com",
+        "subject": "Summarized important emails",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1920,
+        2384
+      ],
+      "id": "56ca2f3e-a94d-4603-b8c2-a1fe65b1e881",
+      "name": "Send Summary Email4",
+      "webhookId": "f0237eeb-113a-4043-a001-a989b4d8cde6",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "HMuL6SlADU6HtS43",
+          "name": "Bryan Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// return $input.all().map(item => ({ id: item.json.id }));\n\n\n// removes duplicate\nreturn [...new Map($input.all().map(item => [item.json.id, item])).values()];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        2384
+      ],
+      "id": "e98bb0fe-69e6-4402-9374-286d0f31d4aa",
+      "name": "remove duplicate result"
+    },
+    {
+      "parameters": {
+        "content": "## We add category property for each, so we can determine in the next nodes",
+        "height": 800,
+        "width": 224
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        1856
+      ],
+      "id": "a49ab2eb-05c4-4dc6-b6d4-5ec54763adb1",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "## We use Ai to identify the email message, if it is:\n- highPriority\n- actionRequired\n- followUp\n- deadlines",
+        "height": 336,
+        "width": 256
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -528,
+        1952
+      ],
+      "id": "f4d220ca-69a6-4e02-8659-308a0d23a8b6",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "## We are combining emails with same category just for html preparation for the next code node",
+        "height": 256,
+        "width": 256
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        2048
+      ],
+      "id": "ccbb9892-7a76-4ec7-9f3a-c2f9a59fb7ed",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {
+        "content": "## Prepare html template that we will be sending on gmail",
+        "height": 256,
+        "width": 256
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1536,
+        2048
+      ],
+      "id": "fc02383e-b073-40c8-8431-f0ddeb6f1485",
+      "name": "Sticky Note7"
+    },
+    {
+      "parameters": {
+        "content": "## Put email address where you will be sending the summarized emails",
+        "height": 288,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1872,
+        2112
+      ],
+      "id": "b8581691-0fe0-4b94-92a2-6d95218dce6d",
+      "name": "Sticky Note8"
+    },
+    {
+      "parameters": {
+        "content": "## Suggestions\n\nInstead using using important category.\n\nAsk LLM to scan the 24h emails and summarize it \n",
+        "height": 208,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        224,
+        1904
+      ],
+      "typeVersion": 1,
+      "id": "f52e0997-2aac-46a6-903d-2cf149e740ce",
+      "name": "Sticky Note10"
+    },
+    {
+      "parameters": {
+        "content": "## Instead sending directly via email. \n\nSend it to the person incharge then put it in a doc format.",
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2192,
+        2176
+      ],
+      "typeVersion": 1,
+      "id": "b0d89195-a4e5-4bc9-9f02-dc8c0b401875",
+      "name": "Sticky Note11"
+    }
+  ],
+  "connections": {
+    "Daily 8AM Trigger2": {
+      "main": [
+        [
+          {
+            "node": "Get Last 24h Emails2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Last 24h Emails2": {
+      "main": [
+        [
+          {
+            "node": "Text Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Text Classifier": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code in JavaScript3",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code in JavaScript4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Text Classifier",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "remove duplicate result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript4": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Categorize Emails3": {
+      "main": [
+        [
+          {
+            "node": "Generate HTML Summary3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate HTML Summary3": {
+      "main": [
+        [
+          {
+            "node": "Send Summary Email4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "remove duplicate result": {
+      "main": [
+        [
+          {
+            "node": "Categorize Emails3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "1a78162823e5db613f1a643112f709af771e976f8a926aa9b3e26e43d71b7f51"
+  }
+}

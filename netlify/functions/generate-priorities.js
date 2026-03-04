@@ -1,10 +1,11 @@
 // Generate Priorities — On-demand Top 5 Priority Alignment
-// Pulls Calendar, Gmail, Google Tasks → AI generates daily priorities
+// Pulls Calendar, Gmail/Outlook, Google Tasks/To Do → AI generates daily priorities
 const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
 const jwt = require('jsonwebtoken');
 const cookie = require('cookie');
 const OpenAI = require('openai');
+const msGraph = require('./lib/microsoft-graph');
 
 // ─── Auth Helper ───
 function getUserIdFromCookie(event) {
@@ -44,42 +45,54 @@ exports.handler = async (event) => {
             return { statusCode: 404, body: JSON.stringify({ error: 'User not found' }) };
         }
 
-        if (!user.google_access_token) {
-            return { statusCode: 400, body: JSON.stringify({ error: 'No Google connection found. Please reconnect.' }) };
+        // 2. Detect provider
+        const provider = user.google_access_token ? 'google' : user.microsoft_access_token ? 'microsoft' : null;
+        if (!provider) {
+            return { statusCode: 400, body: JSON.stringify({ error: 'No Google or Microsoft connection found. Please connect an account.' }) };
         }
 
-        // 2. Set up Google OAuth client
-        const oauth2Client = new google.auth.OAuth2(
-            process.env.GOOGLE_CLIENT_ID,
-            process.env.GOOGLE_CLIENT_SECRET
-        );
+        // 3. Set up provider client & fetch data
+        let oauth2Client = null;
+        let graphClient = null;
+        let calendarData, emailData, taskData;
 
-        oauth2Client.setCredentials({
-            access_token: user.google_access_token,
-            refresh_token: user.google_refresh_token,
-            expiry_date: user.google_token_expiry ? new Date(user.google_token_expiry).getTime() : null,
-        });
-
-        // Refresh token if expired
-        try {
-            const { credentials } = await oauth2Client.refreshAccessToken();
-            oauth2Client.setCredentials(credentials);
-            if (credentials.access_token !== user.google_access_token) {
-                await supabase.from('users').update({
-                    google_access_token: credentials.access_token,
-                    google_token_expiry: credentials.expiry_date ? new Date(credentials.expiry_date).toISOString() : null,
-                }).eq('id', userId);
+        if (provider === 'google') {
+            oauth2Client = new google.auth.OAuth2(
+                process.env.GOOGLE_CLIENT_ID,
+                process.env.GOOGLE_CLIENT_SECRET
+            );
+            oauth2Client.setCredentials({
+                access_token: user.google_access_token,
+                refresh_token: user.google_refresh_token,
+                expiry_date: user.google_token_expiry ? new Date(user.google_token_expiry).getTime() : null,
+            });
+            try {
+                const { credentials } = await oauth2Client.refreshAccessToken();
+                oauth2Client.setCredentials(credentials);
+                if (credentials.access_token !== user.google_access_token) {
+                    await supabase.from('users').update({
+                        google_access_token: credentials.access_token,
+                        google_token_expiry: credentials.expiry_date ? new Date(credentials.expiry_date).toISOString() : null,
+                    }).eq('id', userId);
+                }
+            } catch (refreshErr) {
+                console.log('Token refresh note:', refreshErr.message);
             }
-        } catch (refreshErr) {
-            console.log('Token refresh note:', refreshErr.message);
-        }
 
-        // 3. Fetch data from all 3 sources in parallel
-        const [calendarData, emailData, taskData] = await Promise.all([
-            fetchCalendarEvents(oauth2Client, user.calendar_id || 'primary'),
-            fetchPriorityEmails(oauth2Client),
-            fetchGoogleTasks(oauth2Client),
-        ]);
+            [calendarData, emailData, taskData] = await Promise.all([
+                fetchCalendarEvents(oauth2Client, user.calendar_id || 'primary'),
+                fetchPriorityEmails(oauth2Client),
+                fetchGoogleTasks(oauth2Client),
+            ]);
+        } else {
+            graphClient = await msGraph.createGraphClient(user, supabase);
+
+            [calendarData, emailData, taskData] = await Promise.all([
+                fetchCalendarEventsMicrosoft(graphClient),
+                fetchPriorityEmailsMicrosoft(graphClient),
+                fetchTasksMicrosoft(graphClient),
+            ]);
+        }
 
         // 4. Process each data source
         const processedCalendar = processCalendarEvents(calendarData);
@@ -95,9 +108,14 @@ exports.handler = async (event) => {
 
         // 7. Format and email the report
         const report = formatPriorityReport(aiOutput, context, user);
-        const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-        const rawEmail = createRawEmail(user.email, report.subject, report.html);
-        await gmail.users.messages.send({ userId: 'me', requestBody: { raw: rawEmail } });
+
+        if (provider === 'google') {
+            const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+            const rawEmail = createRawEmail(user.email, report.subject, report.html);
+            await gmail.users.messages.send({ userId: 'me', requestBody: { raw: rawEmail } });
+        } else {
+            await msGraph.sendEmail(graphClient, user.email, report.subject, report.html);
+        }
 
         // 8. Log success
         await supabase.from('briefing_logs').insert({
@@ -242,6 +260,69 @@ async function fetchGoogleTasks(auth) {
         return allTasks;
     } catch (err) {
         console.log('Tasks fetch error:', err.message);
+        return [];
+    }
+}
+
+// ═══════════════════════════════════════════════
+//  Microsoft Data Fetching
+// ═══════════════════════════════════════════════
+
+async function fetchCalendarEventsMicrosoft(graphClient) {
+    try {
+        const now = new Date();
+        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const endOfRange = new Date(startOfDay.getTime() + 3 * 24 * 60 * 60 * 1000);
+
+        const msEvents = await msGraph.fetchCalendarEvents(graphClient, startOfDay.toISOString(), endOfRange.toISOString());
+        // Normalize to Google event shape for processCalendarEvents
+        return msEvents.map(e => msGraph.normalizeGraphEvent(e, ''));
+    } catch (err) {
+        console.log('Microsoft Calendar fetch error:', err.message);
+        return [];
+    }
+}
+
+async function fetchPriorityEmailsMicrosoft(graphClient) {
+    try {
+        const threeDaysAgo = new Date(Date.now() - 3 * 86400000).toISOString();
+        const filter = `receivedDateTime ge ${threeDaysAgo} and (importance eq 'high' or isRead eq false)`;
+        const msEmails = await msGraph.fetchEmails(graphClient, filter, 30);
+
+        // Normalize to the shape that processEmails expects
+        return msEmails.map(e => ({
+            id: e.id,
+            threadId: e.conversationId || e.id,
+            subject: e.subject || 'No Subject',
+            from: e.from?.emailAddress?.address
+                ? `${e.from.emailAddress.name || ''} <${e.from.emailAddress.address}>`
+                : 'Unknown',
+            date: e.receivedDateTime || '',
+            snippet: e.bodyPreview || '',
+            labelIds: [
+                ...(e.importance === 'high' ? ['IMPORTANT'] : []),
+                ...(!e.isRead ? ['UNREAD'] : []),
+                ...(e.flag?.flagStatus === 'flagged' ? ['STARRED'] : []),
+            ],
+        }));
+    } catch (err) {
+        console.log('Microsoft Mail fetch error:', err.message);
+        return [];
+    }
+}
+
+async function fetchTasksMicrosoft(graphClient) {
+    try {
+        const tasks = await msGraph.fetchTasks(graphClient);
+        // Normalize to the shape that processTasks expects
+        return tasks.map(t => ({
+            title: t.title || 'Untitled',
+            notes: t.notes || '',
+            due: t.due || null,
+            listName: t.listName || 'Tasks',
+        }));
+    } catch (err) {
+        console.log('Microsoft Tasks fetch error:', err.message);
         return [];
     }
 }

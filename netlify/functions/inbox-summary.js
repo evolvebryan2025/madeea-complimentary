@@ -5,6 +5,7 @@ const { createClient } = require('@supabase/supabase-js');
 const jwt = require('jsonwebtoken');
 const cookie = require('cookie');
 const OpenAI = require('openai');
+const msGraph = require('./lib/microsoft-graph');
 
 // ─── Auth Helper ───
 function getUserIdFromCookie(event) {
@@ -44,108 +45,110 @@ exports.handler = async (event) => {
             return { statusCode: 404, body: JSON.stringify({ error: 'User not found' }) };
         }
 
-        if (!user.google_access_token) {
-            return { statusCode: 400, body: JSON.stringify({ error: 'No Google connection found. Please reconnect.' }) };
+        // 2. Detect provider
+        const provider = user.google_access_token ? 'google' : user.microsoft_access_token ? 'microsoft' : null;
+        if (!provider) {
+            return { statusCode: 400, body: JSON.stringify({ error: 'No Google or Microsoft connection found. Please connect an account.' }) };
         }
 
-        // 2. Set up Google OAuth client
-        const oauth2Client = new google.auth.OAuth2(
-            process.env.GOOGLE_CLIENT_ID,
-            process.env.GOOGLE_CLIENT_SECRET
-        );
+        // 3. Fetch emails based on provider
+        let emails = [];
+        let oauth2Client = null;
+        let gmail = null;
+        let graphClient = null;
 
-        oauth2Client.setCredentials({
-            access_token: user.google_access_token,
-            refresh_token: user.google_refresh_token,
-            expiry_date: user.google_token_expiry ? new Date(user.google_token_expiry).getTime() : null,
-        });
-
-        // Refresh token if expired
-        try {
-            const { credentials } = await oauth2Client.refreshAccessToken();
-            oauth2Client.setCredentials(credentials);
-
-            if (credentials.access_token !== user.google_access_token) {
-                await supabase.from('users').update({
-                    google_access_token: credentials.access_token,
-                    google_token_expiry: credentials.expiry_date ? new Date(credentials.expiry_date).toISOString() : null,
-                }).eq('id', userId);
-            }
-        } catch (refreshErr) {
-            console.log('Token refresh note:', refreshErr.message);
-        }
-
-        // 3. Fetch emails from last 24 hours (IMPORTANT label or unread/starred)
-        const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-        const after24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        const afterDate = Math.floor(after24h.getTime() / 1000);
-
-        const messagesRes = await gmail.users.messages.list({
-            userId: 'me',
-            q: `(is:important OR is:starred OR is:unread) after:${afterDate}`,
-            maxResults: 30,
-        });
-
-        const messageIds = messagesRes.data.messages || [];
-
-        if (messageIds.length === 0) {
-            return {
-                statusCode: 200,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    success: true,
-                    message: 'No important emails in the last 24 hours. Inbox Zero! 🎉',
-                    totalEmails: 0,
-                    categories: {
-                        highPriority: [],
-                        actionRequired: [],
-                        followUp: [],
-                        deadlines: [],
-                    },
-                }),
-            };
-        }
-
-        // 4. Fetch full email details (parallel, batched)
-        const emails = [];
-        for (const msg of messageIds.slice(0, 30)) {
+        if (provider === 'google') {
+            oauth2Client = new google.auth.OAuth2(
+                process.env.GOOGLE_CLIENT_ID,
+                process.env.GOOGLE_CLIENT_SECRET
+            );
+            oauth2Client.setCredentials({
+                access_token: user.google_access_token,
+                refresh_token: user.google_refresh_token,
+                expiry_date: user.google_token_expiry ? new Date(user.google_token_expiry).getTime() : null,
+            });
             try {
-                const full = await gmail.users.messages.get({
-                    userId: 'me',
-                    id: msg.id,
-                    format: 'full',
-                });
-
-                const headers = {};
-                (full.data.payload?.headers || []).forEach((h) => {
-                    headers[h.name.toLowerCase()] = h.value;
-                });
-
-                // Extract plain text body
-                let bodyText = '';
-                if (full.data.payload?.body?.data) {
-                    bodyText = Buffer.from(full.data.payload.body.data, 'base64').toString('utf-8');
-                } else if (full.data.payload?.parts) {
-                    const textPart = full.data.payload.parts.find(p => p.mimeType === 'text/plain');
-                    if (textPart?.body?.data) {
-                        bodyText = Buffer.from(textPart.body.data, 'base64').toString('utf-8');
-                    }
+                const { credentials } = await oauth2Client.refreshAccessToken();
+                oauth2Client.setCredentials(credentials);
+                if (credentials.access_token !== user.google_access_token) {
+                    await supabase.from('users').update({
+                        google_access_token: credentials.access_token,
+                        google_token_expiry: credentials.expiry_date ? new Date(credentials.expiry_date).toISOString() : null,
+                    }).eq('id', userId);
                 }
-
-                emails.push({
-                    id: msg.id,
-                    threadId: full.data.threadId,
-                    subject: headers['subject'] || 'No Subject',
-                    from: headers['from'] || 'Unknown',
-                    date: headers['date'] || '',
-                    snippet: full.data.snippet || '',
-                    text: bodyText.substring(0, 500), // First 500 chars for classification
-                    labels: full.data.labelIds || [],
-                });
-            } catch (emailErr) {
-                console.log('Error fetching email:', emailErr.message);
+            } catch (refreshErr) {
+                console.log('Token refresh note:', refreshErr.message);
             }
+
+            gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+            const after24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            const afterDate = Math.floor(after24h.getTime() / 1000);
+
+            const messagesRes = await gmail.users.messages.list({
+                userId: 'me',
+                q: `(is:important OR is:starred OR is:unread) after:${afterDate}`,
+                maxResults: 30,
+            });
+            const messageIds = messagesRes.data.messages || [];
+
+            for (const msg of messageIds.slice(0, 30)) {
+                try {
+                    const full = await gmail.users.messages.get({
+                        userId: 'me',
+                        id: msg.id,
+                        format: 'full',
+                    });
+                    const headers = {};
+                    (full.data.payload?.headers || []).forEach((h) => {
+                        headers[h.name.toLowerCase()] = h.value;
+                    });
+                    let bodyText = '';
+                    if (full.data.payload?.body?.data) {
+                        bodyText = Buffer.from(full.data.payload.body.data, 'base64').toString('utf-8');
+                    } else if (full.data.payload?.parts) {
+                        const textPart = full.data.payload.parts.find(p => p.mimeType === 'text/plain');
+                        if (textPart?.body?.data) {
+                            bodyText = Buffer.from(textPart.body.data, 'base64').toString('utf-8');
+                        }
+                    }
+                    emails.push({
+                        id: msg.id,
+                        threadId: full.data.threadId,
+                        subject: headers['subject'] || 'No Subject',
+                        from: headers['from'] || 'Unknown',
+                        date: headers['date'] || '',
+                        snippet: full.data.snippet || '',
+                        text: bodyText.substring(0, 500),
+                        labels: full.data.labelIds || [],
+                        mailLink: `https://mail.google.com/mail/u/0/#inbox/${msg.id}`,
+                    });
+                } catch (emailErr) {
+                    console.log('Error fetching email:', emailErr.message);
+                }
+            }
+        } else {
+            graphClient = await msGraph.createGraphClient(user, supabase);
+            const after24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+            const filter = `receivedDateTime ge ${after24h} and (importance eq 'high' or isRead eq false)`;
+            const msEmails = await msGraph.fetchEmails(graphClient, filter, 30);
+
+            emails = msEmails.map(e => ({
+                id: e.id || '',
+                threadId: e.conversationId || e.id || '',
+                subject: e.subject || 'No Subject',
+                from: e.from?.emailAddress?.address
+                    ? `${e.from.emailAddress.name || ''} <${e.from.emailAddress.address}>`
+                    : 'Unknown',
+                date: e.receivedDateTime || '',
+                snippet: e.bodyPreview || '',
+                text: (e.body?.content || e.bodyPreview || '').substring(0, 500),
+                labels: [
+                    ...(e.importance === 'high' ? ['IMPORTANT'] : []),
+                    ...(!e.isRead ? ['UNREAD'] : []),
+                    ...(e.flag?.flagStatus === 'flagged' ? ['STARRED'] : []),
+                ],
+                mailLink: e.webLink || '',
+            }));
         }
 
         if (emails.length === 0) {
@@ -154,7 +157,7 @@ exports.handler = async (event) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     success: true,
-                    message: 'Could not retrieve email details.',
+                    message: 'No important emails in the last 24 hours. Inbox Zero!',
                     totalEmails: 0,
                     categories: {
                         highPriority: [],
@@ -258,20 +261,25 @@ Classify ALL emails. Use 1-based indexing matching [Email N].`
                     from: fromClean,
                     date: dateFormatted,
                     snippet: email.snippet.substring(0, 150),
-                    gmailLink: `https://mail.google.com/mail/u/0/#inbox/${email.id}`,
+                    gmailLink: email.mailLink || `https://mail.google.com/mail/u/0/#inbox/${email.id}`,
                 });
             }
         }
 
         const totalCategorized = Object.values(categories).reduce((sum, arr) => sum + arr.length, 0);
 
-        // 8. Compose and send email via Gmail
+        // 8. Compose and send email
         const emailHtml = composeInboxEmail(categories, totalCategorized, emails.length);
-        const rawEmail = createRawEmail(user.email, emailHtml.subject, emailHtml.html);
-        await gmail.users.messages.send({
-            userId: 'me',
-            requestBody: { raw: rawEmail },
-        });
+
+        if (provider === 'google') {
+            const rawEmail = createRawEmail(user.email, emailHtml.subject, emailHtml.html);
+            await gmail.users.messages.send({
+                userId: 'me',
+                requestBody: { raw: rawEmail },
+            });
+        } else {
+            await msGraph.sendEmail(graphClient, user.email, emailHtml.subject, emailHtml.html);
+        }
 
         return {
             statusCode: 200,
