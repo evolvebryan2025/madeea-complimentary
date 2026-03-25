@@ -89,7 +89,7 @@ exports.handler = async (event) => {
         console.error('Microsoft auth callback error:', error);
         return {
             statusCode: 302,
-            headers: { Location: `/?auth=error&reason=${encodeURIComponent(error.message)}` },
+            headers: { Location: '/?auth=error&reason=oauth_failed' },
         };
     }
 };

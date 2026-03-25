@@ -6,19 +6,8 @@ const jwt = require('jsonwebtoken');
 const cookie = require('cookie');
 const OpenAI = require('openai');
 const msGraph = require('./lib/microsoft-graph');
-
-// ─── Auth Helper ───
-function getUserIdFromCookie(event) {
-    const jwtSecret = process.env.JWT_SECRET || process.env.ENCRYPTION_KEY;
-    const cookies = cookie.parse(event.headers.cookie || '');
-    const token = cookies.meetprep_session;
-    if (!token) return null;
-    try {
-        return jwt.verify(token, jwtSecret).userId;
-    } catch {
-        return null;
-    }
-}
+const { getUserIdFromCookie } = require('./lib/auth');
+const { createRawEmail } = require('./lib/email');
 
 // ─── Main Handler ───
 exports.handler = async (event) => {
@@ -82,7 +71,11 @@ exports.handler = async (event) => {
                     }).eq('id', userId);
                 }
             } catch (refreshErr) {
-                console.log('Token refresh note:', refreshErr.message);
+                console.error('Google token refresh failed:', refreshErr.message);
+                if (refreshErr.message?.includes('invalid_grant') || refreshErr.message?.includes('Token has been expired')) {
+                    await supabase.from('users').update({ google_access_token: null, google_refresh_token: null, google_token_expiry: null }).eq('id', userId);
+                    return { statusCode: 401, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Google connection expired. Please reconnect your Google account in Settings.' }) };
+                }
             }
 
             const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
@@ -186,18 +179,18 @@ exports.handler = async (event) => {
     } catch (err) {
         console.error('Generate brief error:', err);
 
-        // Log failure
+        // Log failure (guarded — don't let logging crash the error handler)
         await supabase.from('briefing_logs').insert({
             user_id: userId,
             meeting_count: 0,
             status: 'failed',
             error_message: err.message?.substring(0, 500),
-        });
+        }).catch(logErr => console.error('Failed to log briefing error:', logErr.message));
 
         return {
             statusCode: 500,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ error: `Failed to generate brief: ${err.message}` }),
+            body: JSON.stringify({ error: 'Failed to generate brief. Please try again or reconnect your account.' }),
         };
     }
 };
@@ -339,7 +332,13 @@ async function searchDriveDocuments(drive, keywords) {
     try {
         if (!keywords) return [];
         const keywordList = keywords.split(/\s+/).slice(0, 3);
-        const q = keywordList.map((k) => `fullText contains '${k}'`).join(' or ');
+        // Sanitize keywords to prevent Drive query injection
+        const q = keywordList
+            .map((k) => k.replace(/[\\'"]/g, ''))
+            .filter((k) => k.length > 0)
+            .map((k) => `fullText contains '${k}'`)
+            .join(' or ');
+        if (!q) return [];
 
         const res = await drive.files.list({
             q,
@@ -396,7 +395,7 @@ async function searchPreviousMeetingsMicrosoft(graphClient, subject) {
                 endDateTime: timeMax,
                 $orderby: 'start/dateTime',
                 $top: 5,
-                $filter: `contains(subject,'${(subject.split(/\s+/)[0] || '').replace(/'/g, "''")}')`,
+                $filter: `contains(subject,'${(subject.split(/\s+/)[0] || '').replace(/[^a-zA-Z0-9 ]/g, '')}')`,
             })
             .select('subject,start,attendees')
             .get();
@@ -534,7 +533,7 @@ Previous similar meetings:
 ${ctx.previous_meetings.length ? ctx.previous_meetings.slice(0, 2).map(m => `• "${m.subject}" on ${m.date}`).join('\n') : 'None found'}`;
 
     const response = await openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
+        model: 'gpt-4o-mini',
         messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userMessage },
@@ -634,20 +633,4 @@ function composeEmail(meetingBriefs, user) {
     };
 }
 
-function createRawEmail(to, subject, htmlBody) {
-    const boundary = 'boundary_' + Date.now();
-    const email = [
-        `To: ${to}`,
-        `Subject: ${subject}`,
-        'MIME-Version: 1.0',
-        `Content-Type: multipart/alternative; boundary="${boundary}"`,
-        '',
-        `--${boundary}`,
-        'Content-Type: text/html; charset=UTF-8',
-        '',
-        htmlBody,
-        `--${boundary}--`,
-    ].join('\r\n');
-
-    return Buffer.from(email).toString('base64url');
-}
+// createRawEmail is imported from ./lib/email.js

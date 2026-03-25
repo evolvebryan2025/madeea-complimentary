@@ -6,19 +6,8 @@ const jwt = require('jsonwebtoken');
 const cookie = require('cookie');
 const OpenAI = require('openai');
 const msGraph = require('./lib/microsoft-graph');
-
-// ─── Auth Helper ───
-function getUserIdFromCookie(event) {
-    const jwtSecret = process.env.JWT_SECRET || process.env.ENCRYPTION_KEY;
-    const cookies = cookie.parse(event.headers.cookie || '');
-    const token = cookies.meetprep_session;
-    if (!token) return null;
-    try {
-        return jwt.verify(token, jwtSecret).userId;
-    } catch {
-        return null;
-    }
-}
+const { getUserIdFromCookie } = require('./lib/auth');
+const { createRawEmail } = require('./lib/email');
 
 // ─── Main Handler ───
 exports.handler = async (event) => {
@@ -77,7 +66,11 @@ exports.handler = async (event) => {
                     }).eq('id', userId);
                 }
             } catch (refreshErr) {
-                console.log('Token refresh note:', refreshErr.message);
+                console.error('Google token refresh failed:', refreshErr.message);
+                if (refreshErr.message?.includes('invalid_grant') || refreshErr.message?.includes('Token has been expired')) {
+                    await supabase.from('users').update({ google_access_token: null, google_refresh_token: null, google_token_expiry: null }).eq('id', userId);
+                    return { statusCode: 401, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Google connection expired. Please reconnect your Google account in Settings.' }) };
+                }
             }
 
             gmail = google.gmail({ version: 'v1', auth: oauth2Client });
@@ -91,39 +84,43 @@ exports.handler = async (event) => {
             });
             const messageIds = messagesRes.data.messages || [];
 
-            for (const msg of messageIds.slice(0, 30)) {
-                try {
-                    const full = await gmail.users.messages.get({
-                        userId: 'me',
-                        id: msg.id,
-                        format: 'full',
-                    });
-                    const headers = {};
-                    (full.data.payload?.headers || []).forEach((h) => {
-                        headers[h.name.toLowerCase()] = h.value;
-                    });
-                    let bodyText = '';
-                    if (full.data.payload?.body?.data) {
-                        bodyText = Buffer.from(full.data.payload.body.data, 'base64').toString('utf-8');
-                    } else if (full.data.payload?.parts) {
-                        const textPart = full.data.payload.parts.find(p => p.mimeType === 'text/plain');
-                        if (textPart?.body?.data) {
-                            bodyText = Buffer.from(textPart.body.data, 'base64').toString('utf-8');
-                        }
+            // Fetch emails in parallel (batches of 10) for performance
+            const idsToFetch = messageIds.slice(0, 30);
+            const batchSize = 10;
+            for (let i = 0; i < idsToFetch.length; i += batchSize) {
+                const batch = idsToFetch.slice(i, i + batchSize);
+                const results = await Promise.allSettled(
+                    batch.map(msg =>
+                        gmail.users.messages.get({
+                            userId: 'me',
+                            id: msg.id,
+                            format: 'metadata',
+                            metadataHeaders: ['Subject', 'From', 'Date'],
+                        }).then(full => {
+                            const headers = {};
+                            (full.data.payload?.headers || []).forEach((h) => {
+                                headers[h.name.toLowerCase()] = h.value;
+                            });
+                            return {
+                                id: msg.id,
+                                threadId: full.data.threadId,
+                                subject: headers['subject'] || 'No Subject',
+                                from: headers['from'] || 'Unknown',
+                                date: headers['date'] || '',
+                                snippet: full.data.snippet || '',
+                                text: (full.data.snippet || '').substring(0, 500),
+                                labels: full.data.labelIds || [],
+                                mailLink: `https://mail.google.com/mail/u/0/#inbox/${msg.id}`,
+                            };
+                        })
+                    )
+                );
+                for (const result of results) {
+                    if (result.status === 'fulfilled') {
+                        emails.push(result.value);
+                    } else {
+                        console.log('Error fetching email:', result.reason?.message);
                     }
-                    emails.push({
-                        id: msg.id,
-                        threadId: full.data.threadId,
-                        subject: headers['subject'] || 'No Subject',
-                        from: headers['from'] || 'Unknown',
-                        date: headers['date'] || '',
-                        snippet: full.data.snippet || '',
-                        text: bodyText.substring(0, 500),
-                        labels: full.data.labelIds || [],
-                        mailLink: `https://mail.google.com/mail/u/0/#inbox/${msg.id}`,
-                    });
-                } catch (emailErr) {
-                    console.log('Error fetching email:', emailErr.message);
                 }
             }
         } else {
@@ -261,7 +258,7 @@ Classify ALL emails. Use 1-based indexing matching [Email N].`
                     from: fromClean,
                     date: dateFormatted,
                     snippet: email.snippet.substring(0, 150),
-                    gmailLink: email.mailLink || `https://mail.google.com/mail/u/0/#inbox/${email.id}`,
+                    mailLink: email.mailLink || '',
                 });
             }
         }
@@ -304,7 +301,7 @@ Classify ALL emails. Use 1-based indexing matching [Email N].`
         return {
             statusCode: 500,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ error: `Failed to generate inbox summary: ${err.message}` }),
+            body: JSON.stringify({ error: 'Failed to generate inbox summary. Please try again or reconnect your account.' }),
         };
     }
 };
@@ -337,7 +334,7 @@ function composeInboxEmail(categories, totalCategorized, totalScanned) {
             <tr>
               <td style="padding:12px 16px;border-bottom:1px solid #eef0f5;">
                 <div style="font-size:14px;font-weight:600;color:#1a1a2e;margin-bottom:4px;">
-                  <a href="${item.gmailLink}" style="color:#1a1a2e;text-decoration:none;">${item.subject}</a>
+                  <a href="${item.mailLink}" style="color:#1a1a2e;text-decoration:none;">${item.subject}</a>
                 </div>
                 <div style="font-size:12px;color:#888;margin-bottom:4px;">${item.from} · ${item.date}</div>
                 <div style="font-size:13px;color:#555;line-height:1.4;">${item.snippet}</div>
@@ -408,20 +405,4 @@ function composeInboxEmail(categories, totalCategorized, totalScanned) {
     };
 }
 
-function createRawEmail(to, subject, htmlBody) {
-    const boundary = 'boundary_' + Date.now();
-    const email = [
-        `To: ${to}`,
-        `Subject: ${subject}`,
-        'MIME-Version: 1.0',
-        `Content-Type: multipart/alternative; boundary="${boundary}"`,
-        '',
-        `--${boundary}`,
-        'Content-Type: text/html; charset=UTF-8',
-        '',
-        htmlBody,
-        `--${boundary}--`,
-    ].join('\r\n');
-
-    return Buffer.from(email).toString('base64url');
-}
+// createRawEmail is imported from ./lib/email.js

@@ -54,6 +54,8 @@ function toggleUserMenu() {
     if (dropdown) {
         dropdown.classList.toggle('show', isMenuOpen);
     }
+    const btn = document.querySelector('.user-menu-btn');
+    if (btn) btn.setAttribute('aria-expanded', String(isMenuOpen));
 }
 
 function closeUserMenu() {
@@ -530,18 +532,24 @@ function renderHistory(logs) {
         return;
     }
 
-    container.innerHTML = logs.map(log => `
+    const validStatuses = ['success', 'failed'];
+    container.innerHTML = logs.map(log => {
+        const safeStatus = validStatuses.includes(log.status) ? log.status : 'failed';
+        const detail = log.status === 'success'
+            ? 'Brief sent successfully'
+            : `Failed: ${escapeHtml(log.error_message || 'Unknown error')}`;
+        return `
     <div class="history-item">
       <div class="history-item-left">
-        <span class="history-status ${log.status}"></span>
+        <span class="history-status ${safeStatus}"></span>
         <div>
-          <div class="history-date">${formatDate(log.generated_at)}</div>
-          <div class="history-detail">${log.status === 'success' ? 'Brief sent successfully' : `Failed: ${log.error_message || 'Unknown error'}`}</div>
+          <div class="history-date">${escapeHtml(formatDate(log.generated_at))}</div>
+          <div class="history-detail">${detail}</div>
         </div>
       </div>
-      <div class="history-meetings">${log.meeting_count || 0} meeting${log.meeting_count !== 1 ? 's' : ''}</div>
-    </div>
-  `).join('');
+      <div class="history-meetings">${parseInt(log.meeting_count, 10) || 0} meeting${log.meeting_count !== 1 ? 's' : ''}</div>
+    </div>`;
+    }).join('');
 }
 
 // ─── Utility Functions ───
@@ -631,17 +639,19 @@ async function handleGenerateBrief() {
 
         if (response.ok) {
             if (data.meeting_count === 0) {
-                showResult(resultEl, 'info', `📅 ${data.message}`);
+                showResult(resultEl, 'info', `📅 ${escapeHtml(data.message || '')}`);
             } else {
+                const safeMeetings = data.meetings
+                    ? `<br><br>📋 Meetings covered:<br>• ${data.meetings.map(m => escapeHtml(m)).join('<br>• ')}`
+                    : '';
                 showResult(resultEl, 'success',
-                    `✅ ${data.message}<br>📧 Check your inbox for the full brief!` +
-                    (data.meetings ? `<br><br>📋 Meetings covered:<br>• ${data.meetings.join('<br>• ')}` : '')
+                    `✅ ${escapeHtml(data.message || '')}<br>📧 Check your inbox for the full brief!${safeMeetings}`
                 );
             }
             // Refresh the briefs count
             loadBriefingHistory();
         } else {
-            showResult(resultEl, 'error', `❌ ${data.error || 'Something went wrong. Please try again.'}`);
+            showResult(resultEl, 'error', `❌ ${escapeHtml(data.error || 'Something went wrong. Please try again.')}`);
         }
     } catch (err) {
         showResult(resultEl, 'error', '❌ Network error. Please check your connection and try again.');
@@ -687,14 +697,17 @@ async function handleGeneratePriorities() {
         const data = await response.json();
 
         if (response.ok) {
+            const calEvents = parseInt(data.dataSources?.calendarEvents, 10) || 0;
+            const emailsProc = parseInt(data.dataSources?.emailsProcessed, 10) || 0;
+            const tasksRev = parseInt(data.dataSources?.tasksReviewed, 10) || 0;
             showResult(resultEl, 'success',
-                `✅ ${data.message}<br>` +
-                `📊 Analyzed: ${data.dataSources?.calendarEvents || 0} calendar events, ` +
-                `${data.dataSources?.emailsProcessed || 0} emails, ` +
-                `${data.dataSources?.tasksReviewed || 0} tasks`
+                `✅ ${escapeHtml(data.message || '')}<br>` +
+                `📊 Analyzed: ${calEvents} calendar events, ` +
+                `${emailsProc} emails, ` +
+                `${tasksRev} tasks`
             );
 
-            // Display the priorities inline
+            // Display the priorities inline (sanitized)
             if (displayEl && data.priorities) {
                 displayEl.innerHTML = renderPrioritiesMarkdown(data.priorities, data.metrics);
                 displayEl.style.display = 'block';
@@ -702,7 +715,7 @@ async function handleGeneratePriorities() {
 
             loadBriefingHistory();
         } else {
-            showResult(resultEl, 'error', `❌ ${data.error || 'Something went wrong. Please try again.'}`);
+            showResult(resultEl, 'error', `❌ ${escapeHtml(data.error || 'Something went wrong. Please try again.')}`);
         }
     } catch (err) {
         showResult(resultEl, 'error', '❌ Network error. Please check your connection and try again.');
@@ -716,8 +729,11 @@ async function handleGeneratePriorities() {
 }
 
 function renderPrioritiesMarkdown(markdown, metrics) {
+    // Sanitize AI output first — strip any raw HTML tags to prevent XSS
+    const sanitized = escapeHtml(markdown);
+
     // Convert markdown to HTML for inline display
-    let html = markdown
+    let html = sanitized
         .replace(/### (.*)/g, '<h4 class="priorities-h4">$1</h4>')
         .replace(/## (.*)/g, '<h3 class="priorities-h3">$1</h3>')
         .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
@@ -785,14 +801,14 @@ async function handleInboxSummary() {
         const data = await response.json();
 
         if (response.ok) {
-            showResult(resultEl, 'success', `✅ ${data.message}`);
+            showResult(resultEl, 'success', `✅ ${escapeHtml(data.message || '')}`);
 
             if (displayEl && data.categories) {
                 displayEl.innerHTML = renderInboxSummary(data.categories, data.summary, data.generatedAt);
                 displayEl.style.display = 'block';
             }
         } else {
-            showResult(resultEl, 'error', `❌ ${data.error || 'Something went wrong. Please try again.'}`);
+            showResult(resultEl, 'error', `❌ ${escapeHtml(data.error || 'Something went wrong. Please try again.')}`);
         }
     } catch (err) {
         showResult(resultEl, 'error', '❌ Network error. Please check your connection and try again.');
@@ -877,16 +893,20 @@ function renderInboxSummary(categories, summary, generatedAt) {
                     </div>
                 </div>
                 <div class="inbox-email-list">
-                    ${emails.map(email => `
-                        <a href="${email.mailLink || email.gmailLink}" target="_blank" rel="noopener noreferrer" class="inbox-email-item">
+                    ${emails.map(email => {
+                        const href = email.mailLink || '';
+                        const tag = href ? 'a' : 'div';
+                        const linkAttrs = href ? `href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer"` : '';
+                        return `
+                        <${tag} ${linkAttrs} class="inbox-email-item">
                             <div class="inbox-email-top">
                                 <span class="inbox-email-from">${escapeHtml(email.from)}</span>
-                                <span class="inbox-email-date">${email.date}</span>
+                                <span class="inbox-email-date">${escapeHtml(email.date)}</span>
                             </div>
                             <div class="inbox-email-subject">${escapeHtml(email.subject)}</div>
                             <div class="inbox-email-snippet">${escapeHtml(email.snippet)}</div>
-                        </a>
-                    `).join('')}
+                        </${tag}>`;
+                    }).join('')}
                 </div>
             </div>
         `;

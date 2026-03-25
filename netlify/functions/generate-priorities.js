@@ -6,19 +6,7 @@ const jwt = require('jsonwebtoken');
 const cookie = require('cookie');
 const OpenAI = require('openai');
 const msGraph = require('./lib/microsoft-graph');
-
-// ─── Auth Helper ───
-function getUserIdFromCookie(event) {
-    const jwtSecret = process.env.JWT_SECRET || process.env.ENCRYPTION_KEY;
-    const cookies = cookie.parse(event.headers.cookie || '');
-    const token = cookies.meetprep_session;
-    if (!token) return null;
-    try {
-        return jwt.verify(token, jwtSecret).userId;
-    } catch {
-        return null;
-    }
-}
+const { getUserIdFromCookie } = require('./lib/auth');
 
 // ─── Main Handler ───
 exports.handler = async (event) => {
@@ -76,7 +64,11 @@ exports.handler = async (event) => {
                     }).eq('id', userId);
                 }
             } catch (refreshErr) {
-                console.log('Token refresh note:', refreshErr.message);
+                console.error('Google token refresh failed:', refreshErr.message);
+                if (refreshErr.message?.includes('invalid_grant') || refreshErr.message?.includes('Token has been expired')) {
+                    await supabase.from('users').update({ google_access_token: null, google_refresh_token: null, google_token_expiry: null }).eq('id', userId);
+                    return { statusCode: 401, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Google connection expired. Please reconnect your Google account in Settings.' }) };
+                }
             }
 
             [calendarData, emailData, taskData] = await Promise.all([
@@ -697,7 +689,7 @@ DAY HEALTH METRICS:
 Based on this analysis, generate ${context.executive.name}'s TOP 5 PRIORITIES for today. Be decisive and strategic.`;
 
     const response = await openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
+        model: 'gpt-4o-mini',
         messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userMessage },

@@ -43,7 +43,7 @@ exports.handler = async (event) => {
 
         if (authError) {
             console.error('auth-email: Supabase getUser error:', authError.message);
-            return { statusCode: 401, body: JSON.stringify({ error: 'Invalid or expired token: ' + authError.message }) };
+            return { statusCode: 401, body: JSON.stringify({ error: 'Invalid or expired token. Please sign in again.' }) };
         }
 
         const authUser = userData?.user;
@@ -85,7 +85,7 @@ exports.handler = async (event) => {
 
             if (insertErr) {
                 console.error('auth-email: user insert error:', insertErr.message, insertErr.code, insertErr.details);
-                return { statusCode: 500, body: JSON.stringify({ error: 'Failed to create user record: ' + insertErr.message }) };
+                return { statusCode: 500, body: JSON.stringify({ error: 'Failed to create user record. Please try again.' }) };
             }
             if (!newUser) {
                 console.error('auth-email: insert returned no user data');
@@ -122,6 +122,6 @@ exports.handler = async (event) => {
         };
     } catch (err) {
         console.error('auth-email unexpected error:', err.message, err.stack);
-        return { statusCode: 500, body: JSON.stringify({ error: 'Authentication failed: ' + err.message }) };
+        return { statusCode: 500, body: JSON.stringify({ error: 'Authentication failed. Please try again.' }) };
     }
 };

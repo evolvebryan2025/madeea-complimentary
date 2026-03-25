@@ -48,7 +48,7 @@ exports.handler = async (event) => {
             };
         }
 
-        // Remove sensitive fields
+        // Remove ALL sensitive token fields before returning
         delete user.google_access_token;
         delete user.google_refresh_token;
         delete user.google_token_expiry;
@@ -66,7 +66,10 @@ exports.handler = async (event) => {
     // PUT — Update user profile
     if (event.httpMethod === 'PUT') {
         try {
-            const body = JSON.parse(event.body);
+            const body = JSON.parse(event.body || '{}');
+            if (!body || typeof body !== 'object') {
+                return { statusCode: 400, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Invalid request body' }) };
+            }
 
             // Only allow updating specific fields
             const allowedFields = ['name', 'calendar_id', 'send_time', 'timezone', 'is_active', 'theme_preference', 'strategic_goals'];

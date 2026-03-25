@@ -61,10 +61,12 @@
                     <!-- Sign In Form -->
                     <div id="auth-signin-form" class="auth-form">
                         <div class="auth-form-group">
-                            <input type="email" id="signin-email" class="form-input" placeholder="Email address">
+                            <label for="signin-email" class="sr-only">Email address</label>
+                            <input type="email" id="signin-email" class="form-input" placeholder="Email address" autocomplete="email">
                         </div>
                         <div class="auth-form-group">
-                            <input type="password" id="signin-password" class="form-input" placeholder="Password">
+                            <label for="signin-password" class="sr-only">Password</label>
+                            <input type="password" id="signin-password" class="form-input" placeholder="Password" autocomplete="current-password">
                         </div>
                         <button class="btn btn-primary btn-full" onclick="handleSignIn()">Sign In</button>
                         <div id="signin-message" class="auth-message"></div>
@@ -73,13 +75,16 @@
                     <!-- Sign Up Form -->
                     <div id="auth-signup-form" class="auth-form" style="display:none;">
                         <div class="auth-form-group">
-                            <input type="text" id="signup-name" class="form-input" placeholder="Full name">
+                            <label for="signup-name" class="sr-only">Full name</label>
+                            <input type="text" id="signup-name" class="form-input" placeholder="Full name" autocomplete="name">
                         </div>
                         <div class="auth-form-group">
-                            <input type="email" id="signup-email" class="form-input" placeholder="Email address">
+                            <label for="signup-email" class="sr-only">Email address</label>
+                            <input type="email" id="signup-email" class="form-input" placeholder="Email address" autocomplete="email">
                         </div>
                         <div class="auth-form-group">
-                            <input type="password" id="signup-password" class="form-input" placeholder="Password (min 6 characters)">
+                            <label for="signup-password" class="sr-only">Password</label>
+                            <input type="password" id="signup-password" class="form-input" placeholder="Password (min 6 characters)" autocomplete="new-password">
                         </div>
                         <button class="btn btn-primary btn-full" onclick="handleSignUp()">Create Account</button>
                         <div id="signup-message" class="auth-message"></div>
@@ -258,7 +263,7 @@
                     </div>
                     <div class="footer-col">
                         <h4>Company</h4>
-                        <a href="https://madeeas.com" target="_blank">MadeEA</a>
+                        <a href="https://madeeas.com" target="_blank" rel="noopener noreferrer">MadeEA</a>
                         <a href="#">Privacy Policy</a>
                     </div>
                 </div>
@@ -280,7 +285,7 @@
                 </a>
                 <div class="nav-actions">
                     <div class="user-menu" id="user-menu">
-                        <button class="user-menu-btn" onclick="toggleUserMenu()">
+                        <button class="user-menu-btn" onclick="toggleUserMenu()" aria-expanded="false" aria-haspopup="true">
                             <img id="user-avatar" src="" alt="Profile" class="user-avatar">
                             <span id="user-name-nav" class="user-name-nav">User</span>
                             <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -539,8 +544,8 @@
                                         <label>Daily Briefs Active</label>
                                         <span class="form-hint">Toggle off to pause daily brief emails</span>
                                     </div>
-                                    <label class="toggle">
-                                        <input type="checkbox" id="profile-active" checked>
+                                    <label class="toggle" for="profile-active">
+                                        <input type="checkbox" id="profile-active" checked aria-label="Daily Briefs Active">
                                         <span class="toggle-slider"></span>
                                     </label>
                                 </div>
@@ -632,12 +637,12 @@
     </div>
 
     <!-- Toast Notification -->
-    <div id="toast" class="toast">
+    <div id="toast" class="toast" role="status" aria-live="polite">
         <span id="toast-message"></span>
     </div>
 
     <!-- Loading Overlay -->
-    <div id="loading-overlay" class="loading-overlay">
+    <div id="loading-overlay" class="loading-overlay" role="status" aria-live="polite">
         <div class="loading-spinner">
             <div class="spinner"></div>
             <p>Processing...</p>

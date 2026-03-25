@@ -48,8 +48,19 @@ async function createGraphClient(user, supabase) {
                 await supabase.from('users').update(updateData).eq('id', user.id);
             }
         } catch (refreshErr) {
-            console.log('Microsoft token refresh note:', refreshErr.message);
-            // Continue with existing token — might still be valid
+            console.error('Microsoft token refresh failed:', refreshErr.message);
+            if (refreshErr.message?.includes('invalid_grant') || refreshErr.message?.includes('AADSTS')) {
+                // Clear revoked tokens and signal reconnect needed
+                await supabase.from('users').update({
+                    microsoft_access_token: null,
+                    microsoft_refresh_token: null,
+                    microsoft_token_expiry: null,
+                }).eq('id', user.id);
+                const err = new Error('Microsoft connection expired. Please reconnect your Microsoft account in Settings.');
+                err.code = 'TOKEN_REVOKED';
+                throw err;
+            }
+            // For other errors, continue with existing token — might still be valid
         }
     }
 
@@ -141,9 +152,11 @@ async function fetchEmails(graphClient, filter, maxResults = 30) {
 
 async function searchEmails(graphClient, searchQuery, maxResults = 8) {
     try {
+        // Escape double quotes to prevent OData $search injection
+        const safeQuery = searchQuery.replace(/"/g, '\\"');
         const result = await graphClient
             .api('/me/messages')
-            .query({ $search: `"${searchQuery}"` })
+            .query({ $search: `"${safeQuery}"` })
             .top(maxResults)
             .select('id,subject,from,receivedDateTime,bodyPreview,importance,webLink')
             .get();
