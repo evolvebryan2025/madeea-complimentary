@@ -16,10 +16,8 @@ exports.handler = async (event) => {
 
     return {
         statusCode: 200,
-        headers: {
-            'Content-Type': 'application/json',
-            'Set-Cookie': clearCookie,
-        },
+        headers: { 'Content-Type': 'application/json' },
+        multiValueHeaders: { 'Set-Cookie': [clearCookie] },
         body: JSON.stringify({ success: true }),
     };
 };
