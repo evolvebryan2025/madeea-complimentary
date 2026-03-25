@@ -11,7 +11,7 @@ exports.handler = async (event) => {
 
     if (!jwtSecret) {
         console.error('auth-session: Missing JWT_SECRET and ENCRYPTION_KEY');
-        return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user: null }) };
+        return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user: null, _debug: 'no_jwt_secret' }) };
     }
 
     try {
@@ -21,10 +21,11 @@ exports.handler = async (event) => {
         const token = cookies.meetprep_session;
 
         if (!token) {
+            const cookieKeys = Object.keys(cookies);
             return {
                 statusCode: 200,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user: null }),
+                body: JSON.stringify({ user: null, _debug: 'no_token', _cookieKeys: cookieKeys, _rawCookieLength: rawCookie.length }),
             };
         }
 
@@ -48,7 +49,7 @@ exports.handler = async (event) => {
             return {
                 statusCode: 200,
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user: null }),
+                body: JSON.stringify({ user: null, _debug: 'query_failed', _errorMsg: error?.message, _errorCode: error?.code, _userId: decoded.userId }),
             };
         }
 
@@ -75,7 +76,7 @@ exports.handler = async (event) => {
         return {
             statusCode: 200,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user: null }),
+            body: JSON.stringify({ user: null, _debug: 'jwt_or_exception', _errorMsg: err.message }),
         };
     }
 };
