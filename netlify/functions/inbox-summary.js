@@ -2,8 +2,6 @@
 // Replicates the n8n "Executive Summary Inbox" workflow as a Netlify function
 const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
-const jwt = require('jsonwebtoken');
-const cookie = require('cookie');
 const OpenAI = require('openai');
 const msGraph = require('./lib/microsoft-graph');
 const { getUserIdFromCookie } = require('./lib/auth');

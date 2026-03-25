@@ -2,8 +2,6 @@
 // Replicates the Modal.com cron logic as a Netlify function
 const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
-const jwt = require('jsonwebtoken');
-const cookie = require('cookie');
 const OpenAI = require('openai');
 const msGraph = require('./lib/microsoft-graph');
 const { getUserIdFromCookie } = require('./lib/auth');
@@ -304,24 +302,26 @@ async function searchRelatedEmails(gmail, keywords, attendees) {
         const res = await gmail.users.messages.list({ userId: 'me', q: query, maxResults: 8 });
         const messages = res.data.messages || [];
 
-        const emails = [];
-        for (const msg of messages.slice(0, 8)) {
-            const full = await gmail.users.messages.get({
-                userId: 'me',
-                id: msg.id,
-                format: 'metadata',
-                metadataHeaders: ['Subject', 'From', 'Date'],
-            });
-            const headers = {};
-            (full.data.payload?.headers || []).forEach((h) => { headers[h.name] = h.value; });
-            emails.push({
-                subject: headers.Subject || 'No Subject',
-                from: headers.From || '',
-                date: headers.Date || '',
-                snippet: full.data.snippet || '',
-            });
-        }
-        return emails;
+        const results = await Promise.allSettled(
+            messages.slice(0, 8).map(msg =>
+                gmail.users.messages.get({
+                    userId: 'me',
+                    id: msg.id,
+                    format: 'metadata',
+                    metadataHeaders: ['Subject', 'From', 'Date'],
+                }).then(full => {
+                    const headers = {};
+                    (full.data.payload?.headers || []).forEach((h) => { headers[h.name] = h.value; });
+                    return {
+                        subject: headers.Subject || 'No Subject',
+                        from: headers.From || '',
+                        date: headers.Date || '',
+                        snippet: full.data.snippet || '',
+                    };
+                })
+            )
+        );
+        return results.filter(r => r.status === 'fulfilled').map(r => r.value);
     } catch (err) {
         console.log('Gmail search error:', err.message);
         return [];

@@ -2,11 +2,10 @@
 // Pulls Calendar, Gmail/Outlook, Google Tasks/To Do → AI generates daily priorities
 const { google } = require('googleapis');
 const { createClient } = require('@supabase/supabase-js');
-const jwt = require('jsonwebtoken');
-const cookie = require('cookie');
 const OpenAI = require('openai');
 const msGraph = require('./lib/microsoft-graph');
 const { getUserIdFromCookie } = require('./lib/auth');
+const { createRawEmail } = require('./lib/email');
 
 // ─── Main Handler ───
 exports.handler = async (event) => {
@@ -146,7 +145,7 @@ exports.handler = async (event) => {
         return {
             statusCode: 500,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ error: `Failed to generate priorities: ${err.message}` }),
+            body: JSON.stringify({ error: 'Failed to generate priorities. Please try again or reconnect your account.' }),
         };
     }
 };
@@ -190,28 +189,35 @@ async function fetchPriorityEmails(auth) {
 
         const messages = res.data.messages || [];
         const emails = [];
+        const idsToFetch = messages.slice(0, 30);
+        const batchSize = 10;
 
-        for (const msg of messages.slice(0, 30)) {
-            try {
-                const full = await gmail.users.messages.get({
-                    userId: 'me',
-                    id: msg.id,
-                    format: 'metadata',
-                    metadataHeaders: ['Subject', 'From', 'Date'],
-                });
-                const headers = {};
-                (full.data.payload?.headers || []).forEach(h => { headers[h.name] = h.value; });
-                emails.push({
-                    id: full.data.id,
-                    threadId: full.data.threadId,
-                    subject: headers.Subject || 'No Subject',
-                    from: headers.From || '',
-                    date: headers.Date || '',
-                    snippet: full.data.snippet || '',
-                    labelIds: full.data.labelIds || [],
-                });
-            } catch (e) {
-                // Skip individual email errors
+        for (let i = 0; i < idsToFetch.length; i += batchSize) {
+            const batch = idsToFetch.slice(i, i + batchSize);
+            const results = await Promise.allSettled(
+                batch.map(msg =>
+                    gmail.users.messages.get({
+                        userId: 'me',
+                        id: msg.id,
+                        format: 'metadata',
+                        metadataHeaders: ['Subject', 'From', 'Date'],
+                    }).then(full => {
+                        const headers = {};
+                        (full.data.payload?.headers || []).forEach(h => { headers[h.name] = h.value; });
+                        return {
+                            id: full.data.id,
+                            threadId: full.data.threadId,
+                            subject: headers.Subject || 'No Subject',
+                            from: headers.From || '',
+                            date: headers.Date || '',
+                            snippet: full.data.snippet || '',
+                            labelIds: full.data.labelIds || [],
+                        };
+                    })
+                )
+            );
+            for (const result of results) {
+                if (result.status === 'fulfilled') emails.push(result.value);
             }
         }
         return emails;
@@ -776,21 +782,4 @@ function formatPriorityReport(aiOutput, context, user) {
     };
 }
 
-function createRawEmail(to, subject, htmlBody) {
-    const boundary = 'boundary_' + Date.now();
-    const encodedSubject = `=?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`;
-    const email = [
-        `To: ${to}`,
-        `Subject: ${encodedSubject}`,
-        'MIME-Version: 1.0',
-        `Content-Type: multipart/alternative; boundary="${boundary}"`,
-        '',
-        `--${boundary}`,
-        'Content-Type: text/html; charset=UTF-8',
-        '',
-        htmlBody,
-        `--${boundary}--`,
-    ].join('\r\n');
-
-    return Buffer.from(email).toString('base64url');
-}
+// createRawEmail is imported from ./lib/email.js

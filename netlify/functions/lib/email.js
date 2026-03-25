@@ -5,9 +5,10 @@
  */
 function createRawEmail(to, subject, htmlBody) {
     const boundary = 'boundary_' + Date.now();
+    const encodedSubject = `=?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`;
     const email = [
         `To: ${to}`,
-        `Subject: ${subject}`,
+        `Subject: ${encodedSubject}`,
         'MIME-Version: 1.0',
         `Content-Type: multipart/alternative; boundary="${boundary}"`,
         '',
