@@ -122,25 +122,27 @@ exports.handler = async (event) => {
         const drive = provider === 'google' ? google.drive({ version: 'v3', auth: oauth2Client }) : null;
         const calendar = provider === 'google' ? google.calendar({ version: 'v3', auth: oauth2Client }) : null;
 
-        // 6. Process each meeting
-        const meetingBriefs = [];
+        // 6. Process meetings in parallel (cap at 5 to stay within timeout)
+        const meetingsToProcess = meetings.slice(0, 5);
+        const results = await Promise.allSettled(
+            meetingsToProcess.map(meeting =>
+                processMeeting(meeting, gmail, drive, calendar, calendarId, user, provider, graphClient)
+            )
+        );
 
-        for (const meeting of meetings) {
-            try {
-                const brief = await processMeeting(meeting, gmail, drive, calendar, calendarId, user, provider, graphClient);
-                meetingBriefs.push(brief);
-            } catch (meetingErr) {
-                console.error(`Error processing meeting "${meeting.summary}":`, meetingErr.message);
-                meetingBriefs.push({
-                    subject: meeting.summary || 'Unknown Meeting',
-                    brief: `⚠️ Could not generate brief: ${meetingErr.message}`,
-                    meeting,
-                    start_time: meeting.start?.dateTime || meeting.start?.date || '',
-                    attendees: meeting.attendees || [],
-                    context: { emails: 0, documents: 0, previous_meetings: 0 },
-                });
-            }
-        }
+        const meetingBriefs = results.map((result, i) => {
+            if (result.status === 'fulfilled') return result.value;
+            const meeting = meetingsToProcess[i];
+            console.error(`Error processing meeting "${meeting.summary}":`, result.reason?.message);
+            return {
+                subject: meeting.summary || 'Unknown Meeting',
+                brief: `Could not generate brief for this meeting.`,
+                meeting,
+                start_time: meeting.start?.dateTime || meeting.start?.date || '',
+                attendees: meeting.attendees || [],
+                context: { emails: 0, documents: 0, previous_meetings: 0 },
+            };
+        });
 
         // 7. Compose HTML email
         const emailHtml = composeEmail(meetingBriefs, user);
